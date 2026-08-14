@@ -28,11 +28,11 @@ config/
 
 ## Deployed Services
 
-The prototype is deployed on a Hostinger VPS:
+The prototype is deployed on a Hostinger VPS (187.127.123.229):
 
-- **Indexer:** `http://127.0.0.1:8080` (Tor hidden service configured)
-- **Guardian:** `http://127.0.0.1:8081` (Tor hidden service configured)
-- **Pool address:** generated from `GUARDIAN_SEED`
+- **Indexer:** `http://127.0.0.1:8080` (VPS localhost) / Tor: `ejg5mnh3lvhmgwyrxrbzuqgd3k3siplndsxhzht23vxitjxppf2yukid.onion`
+- **Guardian:** `http://127.0.0.1:8081` (VPS localhost) / Tor: `jnigdgannexjxemablsyxwf6uass3ufcq4xu6eftmrwadym3z3dleyad.onion`
+- **Pool address:** `nano_dzb6fh849xzauhjtbue8o9h8go3ezmkbtr5nmy5i93kcbcwsjbs1irw4dy8k`
 
 ## Quick Start
 
