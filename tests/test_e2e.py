@@ -1,28 +1,27 @@
 """
-End-to-end test of VELA v2 core prototype with mocked Nano RPC.
+End-to-end test of VELA v2 with mocked Nano RPC and real Groth16 proofs.
 """
 import hashlib
 import os
+import shutil
 import sys
 import time
-import threading
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.vela_crypto import (
     nano_seed_to_keypair,
     nano_address_from_pubkey,
-    nano_pubkey_from_address,
     nano_state_block_hash,
     sign_message,
     derive_view_spend,
     stealth_address,
-    find_valid_commitment,
     compute_commitment,
     compute_nullifier,
     pool_pubkey,
-    pool_address,
 )
+from src.poseidon_bridge import split32, field_to_bytes32
+from src.snarkjs_bridge import generate_proof
 from src.vela_indexer import VelaIndexer, create_app
 from src.vela_guardian import VelaGuardian, create_app as create_guardian_app
 
@@ -74,12 +73,13 @@ def build_fake_deposit_commitment(source_seed, view_seed, denom):
     R, P_w, _ = stealth_address(A, B)
     withdraw_address = nano_address_from_pubkey(P_w)
     n = os.urandom(32)
-    t, C = find_valid_commitment(n, P_w, source_pub)
+    t = os.urandom(32)
+    C = compute_commitment(n, t, P_w, source_pub)
+    C_bytes = field_to_bytes32(C)
 
     rep = source_address
     rep_pub = source_pub
 
-    # Source starts with denom + 1 raw
     balance = denom + 1
     previous = bytes(32)
 
@@ -97,7 +97,7 @@ def build_fake_deposit_commitment(source_seed, view_seed, denom):
     }
 
     commit_balance = deposit_balance - 1
-    commit_hash = nano_state_block_hash(source_pub, deposit_hash, rep_pub, commit_balance, C)
+    commit_hash = nano_state_block_hash(source_pub, deposit_hash, rep_pub, commit_balance, C_bytes)
     commit_sig = sign_message(source_sk, commit_hash)
     commit_block = {
         "type": "state",
@@ -105,7 +105,7 @@ def build_fake_deposit_commitment(source_seed, view_seed, denom):
         "previous": deposit_hash.hex(),
         "representative": rep,
         "balance": str(commit_balance),
-        "link": C.hex(),
+        "link": C_bytes.hex(),
         "signature": commit_sig.hex(),
     }
 
@@ -118,6 +118,7 @@ def build_fake_deposit_commitment(source_seed, view_seed, denom):
         "n": n,
         "t": t,
         "C": C,
+        "C_bytes": C_bytes,
         "deposit_hash": deposit_hash.hex(),
         "commit_hash": commit_hash.hex(),
         "deposit_block": deposit_block,
@@ -128,7 +129,7 @@ def build_fake_deposit_commitment(source_seed, view_seed, denom):
 
 
 def test_e2e():
-    denom = 10**30  # 1 XNO
+    denom = 10**30
 
     source_seed = os.urandom(32)
     view_seed = os.urandom(32)
@@ -136,51 +137,43 @@ def test_e2e():
 
     info = build_fake_deposit_commitment(source_seed, view_seed, denom)
 
-    # Set up fake RPC
     fake_rpc = FakeRPC()
     fake_rpc.add_account(info["source_address"], denom + 1)
     fake_rpc.set_block(info["deposit_hash"], {
-        "block_account": info["source_address"],
         "amount": str(denom),
         "local_timestamp": str(int(time.time())),
         "contents": info["deposit_block"],
     })
     fake_rpc.set_block(info["commit_hash"], {
-        "block_account": info["source_address"],
         "local_timestamp": str(int(time.time())),
         "contents": info["commit_block"],
     })
 
-    # Guardian pool account needs balance
-    guardian = VelaGuardian(guardian_seed)
+    guardian_data_dir = "data/test_guardian"
+    if os.path.exists(guardian_data_dir):
+        shutil.rmtree(guardian_data_dir)
+    guardian = VelaGuardian(guardian_seed, data_dir=guardian_data_dir)
     fake_rpc.add_account(guardian.pool_address, denom * 10)
 
-    # Patch RPC instances
-    indexer = VelaIndexer(data_dir="data/test_indexer")
+    data_dir = "data/test_indexer"
+    if os.path.exists(data_dir):
+        shutil.rmtree(data_dir)
+    indexer = VelaIndexer(data_dir=data_dir)
     indexer.rpc = fake_rpc
-
     guardian.rpc = fake_rpc
 
-    # Build Flask test apps
     indexer_app = create_app(indexer)
     guardian_app = create_guardian_app(guardian)
 
     indexer_client = indexer_app.test_client()
     guardian_client = guardian_app.test_client()
 
-    # Patch guardian to talk to indexer test client
     def indexer_get(path):
         resp = indexer_client.get(path)
         return resp.json
 
-    def indexer_post(path, data):
-        resp = indexer_client.post(path, json=data)
-        return resp.json
-
     guardian._indexer_get = indexer_get
-    guardian._indexer_post = indexer_post
 
-    # Submit deposit/commitment pair
     resp = indexer_client.post("/submit", json={
         "deposit_hash": info["deposit_hash"],
         "commit_hash": info["commit_hash"],
@@ -188,34 +181,48 @@ def test_e2e():
     assert resp.status_code == 200, resp.json
     print("Indexer submit:", resp.json)
 
-    # Check root
     resp = indexer_client.get(f"/root/{info['epoch']}/{denom}")
     assert resp.status_code == 200, resp.json
-    root = resp.json["root"]
-    print("Root:", root)
+    root = int(resp.json["root"], 16)
+    print("Root:", hex(root))
 
-    # Check proof
-    resp = indexer_client.get(f"/proof/{info['epoch']}/{denom}?C={info['C'].hex()}")
+    resp = indexer_client.get(f"/proof/{info['epoch']}/{denom}?C={hex(info['C'])}")
     assert resp.status_code == 200, resp.json
-    proof = resp.json
-    print("Proof indices:", proof["indices"])
+    merkle_proof = resp.json
+    print("Proof indices:", merkle_proof["indices"])
 
-    # Build withdrawal request
     N = compute_nullifier(info["n"])
-    challenge = hashlib.blake2b(N + info["P_w"], digest_size=32).digest()
-    client_sig = sign_message(info["source_sk"], challenge)
+    n_lo, n_hi = split32(info["n"])
+    t_lo, t_hi = split32(info["t"])
+    P_w_lo, P_w_hi = split32(info["P_w"])
+    S_pub_lo, S_pub_hi = split32(info["source_pub"])
+
+    input_signals = {
+        "root": root,
+        "nullifier": str(N),
+        "P_w_lo": str(P_w_lo),
+        "P_w_hi": str(P_w_hi),
+        "n_lo": str(n_lo),
+        "n_hi": str(n_hi),
+        "t_lo": str(t_lo),
+        "t_hi": str(t_hi),
+        "S_pub_lo": str(S_pub_lo),
+        "S_pub_hi": str(S_pub_hi),
+        "leafIndex": merkle_proof["indices"],
+        "path": merkle_proof["path"],
+    }
+
+    print("Generating Groth16 proof...")
+    zk = generate_proof(input_signals)
+    print("Proof generated")
 
     req = {
-        "n": info["n"].hex(),
-        "t": info["t"].hex(),
-        "P_w": info["P_w"].hex(),
-        "S_pub": info["source_pub"].hex(),
-        "C": info["C"].hex(),
         "epoch": info["epoch"],
         "denomination": denom,
-        "deposit_hash": info["deposit_hash"],
-        "client_sig": client_sig.hex(),
-        "proof": proof,
+        "P_w": info["P_w"].hex(),
+        "nullifier": hex(N),
+        "proof": zk["proof"],
+        "publicSignals": zk["publicSignals"],
     }
 
     resp = guardian_client.post("/withdraw", json=req)
@@ -226,8 +233,7 @@ def test_e2e():
     assert block["account"] == guardian.pool_address
     assert block["link"] == info["P_w"].hex()
 
-    # Verify nullifier marked spent
-    assert compute_nullifier(info["n"]) in guardian.spent_nullifiers
+    assert N in guardian.spent_nullifiers
     print("E2E test passed!")
 
 

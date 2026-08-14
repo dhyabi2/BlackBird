@@ -1,12 +1,12 @@
 """
-VELA v2 Client CLI (prototype).
-"""
+VELA v2 Client CLI.
 
+Prepares deposits and generates Groth16 ZK proofs for withdrawals.
+"""
 import argparse
 import hashlib
 import json
 import os
-import struct
 import sys
 import time
 from typing import List, Optional
@@ -21,18 +21,18 @@ from .vela_crypto import (
     sign_message,
     derive_view_spend,
     stealth_address,
-    find_valid_commitment,
     compute_commitment,
     compute_nullifier,
     pool_pubkey,
 )
+from .poseidon_bridge import split32, field_to_bytes32
+from .snarkjs_bridge import generate_proof
 
 NANO_RPC_ENDPOINTS = [
     "https://app.nanolooker.com/api/rpc",
     "https://proxy.nanos.cc/proxy",
 ]
 
-# Default Nano PoW threshold for mainnet send/receive
 POW_THRESHOLD = 0xFFFFFFF800000000
 
 
@@ -70,11 +70,9 @@ def compute_pow(block_hash: bytes, threshold: int = POW_THRESHOLD) -> str:
 
 def cmd_generate(args):
     seed_view = os.urandom(32)
-    seed_spend = os.urandom(32)
     a, A, b, B = derive_view_spend(seed_view)
     velaid = {
         "seed_view": seed_view.hex(),
-        "seed_spend": seed_spend.hex(),
         "A": A.hex(),
         "B": B.hex(),
     }
@@ -95,8 +93,10 @@ def cmd_deposit(args):
     withdraw_address = nano_address_from_pubkey(P_w)
 
     n = os.urandom(32)
-    t, C = find_valid_commitment(n, P_w, source_pub)
-    commit_address = nano_address_from_pubkey(C)
+    t = os.urandom(32)
+    C = compute_commitment(n, t, P_w, source_pub)
+    C_bytes = field_to_bytes32(C)
+    # commitment int is field element; bytes32 representation used as block link
 
     info = rpc.call("account_info", {"account": source_address, "representative": "true"})
     if "error" in info:
@@ -130,7 +130,7 @@ def cmd_deposit(args):
 
     # Commitment block (previous = deposit_hash)
     commit_balance = deposit_balance - 1
-    commit_hash = nano_state_block_hash(source_pub, deposit_hash, rep_pub, commit_balance, C)
+    commit_hash = nano_state_block_hash(source_pub, deposit_hash, rep_pub, commit_balance, C_bytes)
     commit_sig = sign_message(source_sk, commit_hash)
     commit_work = compute_pow(commit_hash) if not args.no_pow else "0000000000000000"
     commit_block = {
@@ -139,7 +139,7 @@ def cmd_deposit(args):
         "previous": deposit_hash.hex(),
         "representative": rep_address,
         "balance": str(commit_balance),
-        "link": C.hex(),
+        "link": C_bytes.hex(),
         "signature": commit_sig.hex(),
         "work": commit_work,
     }
@@ -147,8 +147,7 @@ def cmd_deposit(args):
     print(json.dumps({
         "source_address": source_address,
         "withdraw_address": withdraw_address,
-        "commitment_address": commit_address,
-        "commitment": C.hex(),
+        "commitment": hex(C),
         "nullifier_secret": n.hex(),
         "trapdoor": t.hex(),
         "P_w": P_w.hex(),
@@ -171,33 +170,52 @@ def cmd_withdraw(args):
     N = compute_nullifier(n)
     denom = int(float(args.denomination) * 1e30)
     epoch = args.epoch
-    deposit_hash = args.deposit_hash
-
-    source_seed = bytes.fromhex(args.source_seed)
-    source_sk, _ = nano_seed_to_keypair(source_seed)
-    challenge = hashlib.blake2b(N + P_w, digest_size=32).digest()
-    client_sig = sign_message(source_sk, challenge)
 
     indexer_url = args.indexer_url
-    proof_resp = requests.get(f"{indexer_url}/proof/{epoch}/{denom}?C={C.hex()}", timeout=10)
+    root_resp = requests.get(f"{indexer_url}/root/{epoch}/{denom}", timeout=10)
+    root_resp.raise_for_status()
+    root = int(root_resp.json()["root"], 16)
+
+    proof_resp = requests.get(f"{indexer_url}/proof/{epoch}/{denom}?C={hex(C)}", timeout=10)
     proof_resp.raise_for_status()
-    proof = proof_resp.json()
+    merkle_proof = proof_resp.json()
+
+    n_lo, n_hi = split32(n)
+    t_lo, t_hi = split32(t)
+    P_w_lo, P_w_hi = split32(P_w)
+    S_pub_lo, S_pub_hi = split32(S_pub)
+
+    input_signals = {
+        "root": str(root),
+        "nullifier": str(N),
+        "P_w_lo": str(P_w_lo),
+        "P_w_hi": str(P_w_hi),
+        "n_lo": str(n_lo),
+        "n_hi": str(n_hi),
+        "t_lo": str(t_lo),
+        "t_hi": str(t_hi),
+        "S_pub_lo": str(S_pub_lo),
+        "S_pub_hi": str(S_pub_hi),
+        "leafIndex": merkle_proof["indices"],
+        "path": merkle_proof["path"],
+    }
+
+    print("Generating Groth16 proof...", file=sys.stderr)
+    zk = generate_proof(input_signals)
+    proof = zk["proof"]
+    public_signals = zk["publicSignals"]
 
     req = {
-        "n": n.hex(),
-        "t": t.hex(),
-        "P_w": P_w.hex(),
-        "S_pub": S_pub.hex(),
-        "C": C.hex(),
         "epoch": epoch,
         "denomination": denom,
-        "deposit_hash": deposit_hash,
-        "client_sig": client_sig.hex(),
+        "P_w": P_w.hex(),
+        "nullifier": hex(N),
         "proof": proof,
+        "publicSignals": public_signals,
     }
 
     guardian_url = args.guardian_url
-    resp = requests.post(f"{guardian_url}/withdraw", json=req, timeout=30)
+    resp = requests.post(f"{guardian_url}/withdraw", json=req, timeout=60)
     result = resp.json()
     if "error" in result:
         print(json.dumps(result, indent=2))
@@ -207,7 +225,6 @@ def cmd_withdraw(args):
     if args.broadcast and not args.no_pow:
         block_hash = bytes.fromhex(result.get("block_hash", ""))
         if not block_hash:
-            # Recompute hash from block fields
             account = nano_pubkey_from_address(block["account"])
             previous = bytes.fromhex(block["previous"])
             rep = nano_pubkey_from_address(block["representative"])
@@ -222,7 +239,7 @@ def cmd_withdraw(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="VELA v2 prototype client")
+    parser = argparse.ArgumentParser(description="VELA v2 client")
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("generate", help="Generate a new VelaID")
@@ -233,13 +250,11 @@ def main():
     dep.add_argument("denomination")
     dep.add_argument("--no-pow", action="store_true", help="Skip PoW computation")
 
-    wit = sub.add_parser("withdraw", help="Request a withdrawal")
-    wit.add_argument("source_seed")
+    wit = sub.add_parser("withdraw", help="Request a withdrawal using a Groth16 ZK proof")
     wit.add_argument("nullifier_secret")
     wit.add_argument("trapdoor")
     wit.add_argument("P_w")
     wit.add_argument("S_pub")
-    wit.add_argument("deposit_hash")
     wit.add_argument("denomination")
     wit.add_argument("epoch", type=int)
     wit.add_argument("--indexer-url", default="http://127.0.0.1:8080")

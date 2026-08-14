@@ -1,15 +1,9 @@
 """
-VELA v2 Indexer (prototype).
+VELA v2 Indexer.
 
-Tracks pool deposits and commitments, builds per-epoch Merkle trees,
+Tracks pool deposits and commitments, builds per-epoch Poseidon Merkle trees,
 and serves roots/proofs to clients.
-
-NOTE: This prototype uses Blake2b for the Merkle tree instead of Poseidon
-and does not perform true ZK verification. The guardian sees the source
-public key. A production deployment must integrate the Circom circuit.
 """
-
-import hashlib
 import json
 import os
 import threading
@@ -19,9 +13,8 @@ from typing import Dict, List, Optional, Tuple
 import requests
 from flask import Flask, request, jsonify
 
-from .vela_crypto import (
-    pool_pubkey,
-)
+from .vela_crypto import pool_pubkey
+from .poseidon_bridge import poseidon_tree
 
 EPOCH_SECONDS = 86400
 DENOMINATIONS = {10**29, 10**30, 10**31, 10**32}
@@ -52,51 +45,23 @@ class NanoRPC:
         raise RuntimeError(f"All Nano RPC endpoints failed: {last_err}")
 
 
-class MerkleTree:
-    """Merkle tree using Blake2b (prototype; production uses Poseidon)."""
+class PoseidonMerkleTree:
+    """Merkle tree using Poseidon (matches circuit/vela.circom)."""
 
-    def __init__(self, leaves: List[bytes], depth: int = MERKLE_DEPTH):
+    def __init__(self, commitments: List[int], depth: int = MERKLE_DEPTH):
         self.depth = depth
-        self.leaves = sorted(set(leaves))
-        self.size = 2 ** depth
-        self.leaves += [bytes(32)] * (self.size - len(self.leaves))
-        self.zeros = self._build_zeros()
-        self.root, self.tree = self._build_tree()
+        self.commitments = sorted(set(commitments))
+        result = poseidon_tree(self.commitments, depth, leaf_index=0)
+        self.root = int(result["root"])
+        self._leaf_index_map = {C: i for i, C in enumerate(self.commitments)}
 
-    def _hash(self, a: bytes, b: bytes) -> bytes:
-        if a > b:
-            a, b = b, a
-        return hashlib.blake2b(a + b, digest_size=32).digest()
-
-    def _build_zeros(self) -> List[bytes]:
-        zeros = [bytes(32)]
-        for _ in range(self.depth):
-            zeros.append(self._hash(zeros[-1], zeros[-1]))
-        return zeros
-
-    def _build_tree(self) -> Tuple[bytes, List[List[bytes]]]:
-        tree = [self.leaves]
-        current = self.leaves[:]
-        for level in range(self.depth):
-            next_level = []
-            for i in range(0, len(current), 2):
-                left = current[i]
-                right = current[i + 1] if i + 1 < len(current) else self.zeros[level]
-                next_level.append(self._hash(left, right))
-            tree.append(next_level)
-            current = next_level
-        return current[0], tree
-
-    def get_proof(self, leaf: bytes) -> Tuple[List[bytes], List[int]]:
-        idx = self.leaves.index(leaf)
-        path = []
-        indices = []
-        for level in range(self.depth):
-            sibling_idx = idx ^ 1
-            sibling = self.tree[level][sibling_idx] if sibling_idx < len(self.tree[level]) else self.zeros[level]
-            path.append(sibling)
-            indices.append(idx % 2)
-            idx //= 2
+    def get_proof(self, C: int) -> Tuple[List[int], List[int]]:
+        if C not in self._leaf_index_map:
+            raise ValueError("leaf not found")
+        idx = self._leaf_index_map[C]
+        result = poseidon_tree(self.commitments, self.depth, idx)
+        path = [int(x) for x in result["path"]]
+        indices = result["indices"]
         return path, indices
 
 
@@ -106,7 +71,7 @@ class VelaIndexer:
         os.makedirs(data_dir, exist_ok=True)
         self.rpc = NanoRPC()
         self.commitments: Dict[Tuple[int, int], set] = {}
-        self.trees: Dict[Tuple[int, int], MerkleTree] = {}
+        self.trees: Dict[Tuple[int, int], PoseidonMerkleTree] = {}
         self.nullifiers: set = set()
         self.lock = threading.Lock()
         self._load_state()
@@ -122,7 +87,7 @@ class VelaIndexer:
                     data = json.load(f)
                 for k, v in data.get("commitments", {}).items():
                     epoch, denom = map(int, k.split(":"))
-                    self.commitments[(epoch, denom)] = set(bytes.fromhex(x) for x in v)
+                    self.commitments[(epoch, denom)] = set(int(x, 16) for x in v)
                 self.nullifiers = set(bytes.fromhex(x) for x in data.get("nullifiers", []))
             except Exception as e:
                 print("Failed to load state:", e)
@@ -131,7 +96,7 @@ class VelaIndexer:
         with self.lock:
             data = {
                 "commitments": {
-                    f"{epoch}:{denom}": [x.hex() for x in leaves]
+                    f"{epoch}:{denom}": [hex(x) for x in leaves]
                     for (epoch, denom), leaves in self.commitments.items()
                 },
                 "nullifiers": [x.hex() for x in self.nullifiers],
@@ -142,7 +107,7 @@ class VelaIndexer:
     def current_epoch(self) -> int:
         return int(time.time()) // EPOCH_SECONDS
 
-    def add_commitment(self, epoch: int, denomination: int, C: bytes):
+    def add_commitment(self, epoch: int, denomination: int, C: int):
         with self.lock:
             key = (epoch, denomination)
             self.commitments.setdefault(key, set()).add(C)
@@ -151,9 +116,9 @@ class VelaIndexer:
 
     def _rebuild_tree(self, key: Tuple[int, int]):
         leaves = list(self.commitments.get(key, []))
-        self.trees[key] = MerkleTree(leaves)
+        self.trees[key] = PoseidonMerkleTree(leaves)
 
-    def get_root(self, epoch: int, denomination: int) -> Optional[bytes]:
+    def get_root(self, epoch: int, denomination: int) -> Optional[int]:
         key = (epoch, denomination)
         with self.lock:
             if key not in self.trees:
@@ -162,7 +127,7 @@ class VelaIndexer:
                 self._rebuild_tree(key)
             return self.trees[key].root
 
-    def get_proof(self, epoch: int, denomination: int, C: bytes) -> Optional[dict]:
+    def get_proof(self, epoch: int, denomination: int, C: int) -> Optional[dict]:
         key = (epoch, denomination)
         with self.lock:
             if key not in self.trees:
@@ -174,16 +139,16 @@ class VelaIndexer:
             except ValueError:
                 return None
         return {
-            "path": [x.hex() for x in path],
+            "path": [str(x) for x in path],
             "indices": indices,
         }
 
-    def mark_nullifier(self, N: bytes):
+    def mark_nullifier(self, N: int):
         with self.lock:
             self.nullifiers.add(N)
         self._save_state()
 
-    def is_nullifier_spent(self, N: bytes) -> bool:
+    def is_nullifier_spent(self, N: int) -> bool:
         return N in self.nullifiers
 
     def verify_deposit_commitment_pair(self, deposit_hash: str, commit_hash: str) -> Optional[dict]:
@@ -208,18 +173,17 @@ class VelaIndexer:
             if dep_block.get("link") != pool_pubkey(amount_raw).hex():
                 return None
 
-            C = bytes.fromhex(com_block.get("link", ""))
-            if len(C) != 32:
+            C_bytes = bytes.fromhex(com_block.get("link", ""))
+            if len(C_bytes) != 32:
                 return None
+            C = int.from_bytes(C_bytes, "big")
 
             epoch = int(dep.get("local_timestamp", time.time())) // EPOCH_SECONDS
-            if epoch < 0:
-                epoch = int(time.time()) // EPOCH_SECONDS
             return {
                 "source": dep_block["account"],
                 "denomination": amount_raw,
                 "epoch": epoch,
-                "commitment": C.hex(),
+                "commitment": hex(C),
             }
         except Exception as e:
             print("verify pair error:", e)
@@ -238,16 +202,16 @@ def create_app(indexer: VelaIndexer) -> Flask:
         r = indexer.get_root(epoch, denomination)
         if r is None:
             return jsonify({"error": "no tree"}), 404
-        return jsonify({"root": r.hex(), "epoch": epoch, "denomination": denomination})
+        return jsonify({"root": hex(r), "epoch": epoch, "denomination": denomination})
 
     @app.route("/proof/<int:epoch>/<int:denomination>")
     def proof(epoch, denomination):
-        C = request.args.get("C", "")
+        C_hex = request.args.get("C", "")
         try:
-            C_bytes = bytes.fromhex(C)
+            C = int(C_hex, 16)
         except Exception:
             return jsonify({"error": "invalid C"}), 400
-        p = indexer.get_proof(epoch, denomination, C_bytes)
+        p = indexer.get_proof(epoch, denomination, C)
         if p is None:
             return jsonify({"error": "proof not found"}), 404
         return jsonify(p)
@@ -258,17 +222,17 @@ def create_app(indexer: VelaIndexer) -> Flask:
         result = indexer.verify_deposit_commitment_pair(data.get("deposit_hash"), data.get("commit_hash"))
         if result is None:
             return jsonify({"error": "invalid pair"}), 400
-        indexer.add_commitment(result["epoch"], result["denomination"], bytes.fromhex(result["commitment"]))
+        indexer.add_commitment(result["epoch"], result["denomination"], int(result["commitment"], 16))
         return jsonify({"ok": True, "commitment": result["commitment"]})
 
     @app.route("/nullifier_spent")
     def nullifier_spent():
-        N = request.args.get("N", "")
+        N_hex = request.args.get("N", "")
         try:
-            N_bytes = bytes.fromhex(N)
+            N = int(N_hex, 16)
         except Exception:
             return jsonify({"error": "invalid N"}), 400
-        return jsonify({"spent": indexer.is_nullifier_spent(N_bytes)})
+        return jsonify({"spent": indexer.is_nullifier_spent(N)})
 
     return app
 

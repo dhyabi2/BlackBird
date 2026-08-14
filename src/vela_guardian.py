@@ -1,18 +1,14 @@
 """
-VELA v2 Guardian (prototype).
+VELA v2 Guardian.
 
-Single-key guardian that holds the pool signing key, verifies withdrawal
-requests, and signs/broadcasts Nano withdrawal transactions.
+Single-key guardian that holds the pool signing key, verifies Groth16 ZK
+withdrawal proofs, and signs/broadcasts Nano withdrawal transactions.
 
-WARNING: This prototype uses a single guardian and does NOT use real ZK
-proofs. The guardian sees the source public key. Production must use
-FROST threshold signing and a Circom Groth16 proof.
+Production must replace the single key with FROST threshold signing and a
+distributed guardian set.
 """
-
-import hashlib
 import json
 import os
-import struct
 import time
 from typing import List, Optional
 
@@ -20,19 +16,14 @@ import requests
 from flask import Flask, request, jsonify
 
 from .vela_crypto import (
-    blake2b_256,
     nano_seed_to_keypair,
     nano_address_from_pubkey,
     nano_pubkey_from_address,
     nano_state_block_hash,
     sign_message,
-    verify_signature,
-    compute_commitment,
-    compute_nullifier,
-    pool_address,
-    pool_pubkey,
-    sign_with_scalar,
 )
+from .poseidon_bridge import split32, field_to_bytes32
+from .snarkjs_bridge import verify_proof
 
 EPOCH_SECONDS = 86400
 WITHDRAW_FEE_RAW = int(0.01 * 10**30)
@@ -62,9 +53,10 @@ class NanoRPC:
 
 
 class VelaGuardian:
-    def __init__(self, seed: bytes, indexer_url: str = "http://127.0.0.1:8080"):
+    def __init__(self, seed: bytes, indexer_url: str = "http://127.0.0.1:8080", data_dir: str = "data"):
         self.seed = seed
         self.indexer_url = indexer_url
+        self.data_dir = data_dir
         self.session = requests.Session()
         # Pool keypair for all denominations (simplification; production uses DKG per denom)
         self.pool_sk, self.pool_pub = nano_seed_to_keypair(seed, index=0)
@@ -74,89 +66,75 @@ class VelaGuardian:
         self._load_state()
 
     def _state_path(self) -> str:
-        return "data/guardian_state.json"
+        return os.path.join(self.data_dir, "guardian_state.json")
 
     def _load_state(self):
+        os.makedirs(self.data_dir, exist_ok=True)
         if os.path.exists(self._state_path()):
             try:
                 with open(self._state_path()) as f:
                     data = json.load(f)
-                self.spent_nullifiers = set(bytes.fromhex(x) for x in data.get("nullifiers", []))
+                self.spent_nullifiers = set(int(x, 16) for x in data.get("nullifiers", []))
             except Exception as e:
                 print("Guardian load state error:", e)
 
     def _save_state(self):
-        os.makedirs("data", exist_ok=True)
+        os.makedirs(self.data_dir, exist_ok=True)
         with open(self._state_path(), "w") as f:
-            json.dump({"nullifiers": [x.hex() for x in self.spent_nullifiers]}, f)
+            json.dump({"nullifiers": [hex(x) for x in self.spent_nullifiers]}, f)
 
     def _indexer_get(self, path: str) -> dict:
         resp = self.session.get(self.indexer_url + path, timeout=10)
         resp.raise_for_status()
         return resp.json()
 
-    def _indexer_post(self, path: str, data: dict) -> dict:
-        resp = self.session.post(self.indexer_url + path, json=data, timeout=10)
-        resp.raise_for_status()
-        return resp.json()
-
     def verify_withdrawal_request(self, req: dict) -> Optional[dict]:
         """
-        Verify a withdrawal request.
-        Prototype checks:
-          - C is in the epoch Merkle tree.
-          - N is not spent.
-          - Source pubkey S_pub made a deposit to the pool.
-          - Client signature over challenge proves ownership of S_pub.
+        Verify a ZK withdrawal request.
+
+        Required fields:
+          - epoch, denomination
+          - P_w: 32-byte withdrawal pubkey (hex)
+          - nullifier (hex int)
+          - proof: snarkjs Groth16 proof object
+          - publicSignals: list [root, nullifier, P_w_lo, P_w_hi]
         """
         try:
-            n = bytes.fromhex(req["n"])
-            t = bytes.fromhex(req["t"])
-            P_w = bytes.fromhex(req["P_w"])
-            S_pub = bytes.fromhex(req["S_pub"])
-            C = bytes.fromhex(req["C"])
             epoch = int(req["epoch"])
             denomination = int(req["denomination"])
-            deposit_hash = req["deposit_hash"]
-            client_sig = bytes.fromhex(req["client_sig"])
+            P_w = bytes.fromhex(req["P_w"])
+            N = int(req["nullifier"], 16)
+            proof = req["proof"]
+            public_signals = req["publicSignals"]
 
-            # Verify commitment
-            expected_C = compute_commitment(n, t, P_w, S_pub)
-            if C != expected_C:
+            if len(public_signals) != 4:
                 return None
 
-            # Verify nullifier
-            N = compute_nullifier(n)
+            pub_root = int(public_signals[0])
+            pub_nullifier = int(public_signals[1])
+            pub_P_w_lo = int(public_signals[2])
+            pub_P_w_hi = int(public_signals[3])
+
+            if pub_nullifier != N:
+                return None
+
+            P_w_lo, P_w_hi = split32(P_w)
+            if pub_P_w_lo != P_w_lo or pub_P_w_hi != P_w_hi:
+                return None
+
+            # Root must match indexer
+            root_info = self._indexer_get(f"/root/{epoch}/{denomination}")
+            expected_root = int(root_info["root"], 16)
+            if pub_root != expected_root:
+                return None
+
             if N in self.spent_nullifiers:
                 return None
 
-            # Verify C in tree
-            root = self._indexer_get(f"/root/{epoch}/{denomination}").get("root")
-            if not root:
-                return None
-            root_bytes = bytes.fromhex(root)
-            proof = self._indexer_get(f"/proof/{epoch}/{denomination}?C={C.hex()}")
-            if not self._verify_merkle_proof(C, root_bytes, proof):
-                return None
-
-            # Verify source made deposit to pool
-            dep_info = self.rpc.call("block_info", {"hash": deposit_hash, "json_block": "true"})
-            dep_block = dep_info.get("contents", dep_info)
-            if dep_block.get("account") != nano_address_from_pubkey(S_pub):
-                return None
-            if dep_block.get("link") != pool_pubkey(denomination).hex():
-                return None
-            amount = int(dep_info.get("amount", 0))
-            if amount != denomination:
-                return None
-
-            # Verify client signature over challenge
-            challenge = blake2b_256(N + P_w)
-            if not verify_signature(S_pub, challenge, client_sig):
+            if not verify_proof(proof, public_signals):
                 return None
 
             return {
-                "n": n,
                 "P_w": P_w,
                 "denomination": denomination,
                 "N": N,
@@ -164,19 +142,6 @@ class VelaGuardian:
         except Exception as e:
             print("verify withdrawal error:", e)
             return None
-
-    def _verify_merkle_proof(self, C: bytes, root: bytes, proof: dict) -> bool:
-        """Verify a Merkle proof against root."""
-        path = [bytes.fromhex(x) for x in proof["path"]]
-        indices = proof["indices"]
-        current = C
-        for sibling, is_right in zip(path, indices):
-            if sibling < current:
-                a, b = sibling, current
-            else:
-                a, b = current, sibling
-            current = hashlib.blake2b(a + b, digest_size=32).digest()
-        return current == root
 
     def _get_account_info(self, address: str) -> dict:
         return self.rpc.call("account_info", {"account": address, "representative": "true"})
@@ -193,7 +158,6 @@ class VelaGuardian:
         P_w = verified["P_w"]
         N = verified["N"]
 
-        # Build withdrawal send block from pool to P_w
         info = self._get_account_info(self.pool_address)
         if "error" in info:
             return {"error": f"pool account info failed: {info['error']}"}
@@ -222,14 +186,12 @@ class VelaGuardian:
             "balance": str(new_balance),
             "link": P_w.hex(),
             "signature": signature.hex(),
-            "work": "0000000000000000",  # PoW must be computed separately
+            "work": "0000000000000000",
         }
 
-        # Nano RPC may require work; public nodes often don't accept process without valid PoW
-        # For prototype, return the signed block; user can broadcast via own node or compute work
         self.spent_nullifiers.add(N)
         self._save_state()
-        return {"ok": True, "block": block, "block_hash": block_hash.hex(), "nullifier": N.hex()}
+        return {"ok": True, "block": block, "block_hash": block_hash.hex(), "nullifier": hex(N)}
 
 
 def create_app(guardian: VelaGuardian) -> Flask:
@@ -240,7 +202,7 @@ def create_app(guardian: VelaGuardian) -> Flask:
         return jsonify({"status": "ok", "pool_address": guardian.pool_address})
 
     @app.route("/pool_address")
-    def pool_address():
+    def pool_address_route():
         return jsonify({"address": guardian.pool_address})
 
     @app.route("/withdraw", methods=["POST"])

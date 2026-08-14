@@ -19,6 +19,7 @@
   "homepage": "https://github.com/dhyabi2/VELA-revised-spec#readme",
   "dependencies": {
     "circomlib": "^2.0.5",
+    "circomlibjs": "^0.1.7",
     "snarkjs": "^0.7.6"
   }
 }
