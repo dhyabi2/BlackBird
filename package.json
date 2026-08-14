@@ -1,0 +1,24 @@
+{
+  "name": "verifyxnoprivacyprotocol",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dhyabi2/VELA-revised-spec.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/dhyabi2/VELA-revised-spec/issues"
+  },
+  "homepage": "https://github.com/dhyabi2/VELA-revised-spec#readme",
+  "dependencies": {
+    "circomlib": "^2.0.5",
+    "snarkjs": "^0.7.6"
+  }
+}

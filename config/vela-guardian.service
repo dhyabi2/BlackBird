@@ -1,0 +1,15 @@
+[Unit]
+Description=VELA v2 Guardian
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/vela
+ExecStart=/opt/vela/scripts/start_guardian.sh
+Restart=always
+RestartSec=5
+Environment="GUARDIAN_SEED_FILE=/opt/vela/.guardian_seed"
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=VELA v2 Indexer
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/vela
+ExecStart=/opt/vela/scripts/start_indexer.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

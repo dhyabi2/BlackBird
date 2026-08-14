@@ -1,0 +1,279 @@
+"""
+VELA v2 core cryptography and Nano helpers.
+
+Uses:
+- ed25519_blake2b for standard Nano-compatible signing.
+- PyNaCl/libsodium for Ed25519 point arithmetic (stealth addresses).
+"""
+
+import hashlib
+import os
+import struct
+from typing import Tuple, Optional
+
+import ed25519_blake2b
+import nacl.bindings
+
+# Nano custom base32 alphabet
+NANO_ALPHABET = "13456789abcdefghijkmnopqrstuwxyz"
+NANO_CHAR_TO_VALUE = {c: i for i, c in enumerate(NANO_ALPHABET)}
+
+# Ed25519 constants
+SCALAR_BYTES = 32
+POINT_BYTES = 32
+ED25519_L = 0x1000000000000000000000000000000014DEF9DEA2F79CD65812631A5CF5D3ED
+
+# Domain tags
+PROTOCOL_TAG = b"vela_v2"
+DOMAIN_STEALTH = b"vela/v2/stealth"
+DOMAIN_DEPOSIT = b"vela/v2/deposit"
+DOMAIN_NULL = b"vela/v2/nullifier"
+DOMAIN_DATA = b"vela/v2/data"
+
+
+def blake2b_256(data: bytes) -> bytes:
+    return hashlib.blake2b(data, digest_size=32).digest()
+
+
+def blake2b_512(data: bytes) -> bytes:
+    return hashlib.blake2b(data, digest_size=64).digest()
+
+
+def _encode_int(num: int, char_count: int) -> str:
+    chars = []
+    for _ in range(char_count):
+        chars.append(NANO_ALPHABET[num & 0x1F])
+        num >>= 5
+    return "".join(reversed(chars))
+
+
+def _decode_int(s: str) -> int:
+    num = 0
+    for c in s:
+        if c not in NANO_CHAR_TO_VALUE:
+            raise ValueError(f"Invalid Nano base32 character: {c}")
+        num = (num << 5) | NANO_CHAR_TO_VALUE[c]
+    return num
+
+
+def nano_address_from_pubkey(pubkey: bytes) -> str:
+    if len(pubkey) != POINT_BYTES:
+        raise ValueError("Public key must be 32 bytes")
+    num = int.from_bytes(pubkey, "big") << 4
+    encoded_pubkey = _encode_int(num, 52)
+    checksum = _encode_int(int.from_bytes(hashlib.blake2b(pubkey, digest_size=5).digest()[::-1], "big"), 8)
+    return "nano_" + encoded_pubkey + checksum
+
+
+def nano_pubkey_from_address(address: str) -> bytes:
+    if address.startswith("nano_"):
+        payload = address[5:]
+    elif address.startswith("xrb_"):
+        payload = address[4:]
+    else:
+        raise ValueError("Invalid Nano address prefix")
+    if len(payload) != 60:
+        raise ValueError("Invalid Nano address length")
+    num = _decode_int(payload[:52]) >> 4
+    pubkey = num.to_bytes(POINT_BYTES, "big")
+    expected_checksum = _encode_int(int.from_bytes(hashlib.blake2b(pubkey, digest_size=5).digest()[::-1], "big"), 8)
+    if payload[52:] != expected_checksum:
+        raise ValueError("Invalid Nano address checksum")
+    return pubkey
+
+
+# ---------------------------------------------------------------------------
+# Standard Nano accounts (seed -> signing key)
+# ---------------------------------------------------------------------------
+
+def nano_seed_to_keypair(seed: bytes, index: int = 0) -> Tuple[ed25519_blake2b.SigningKey, bytes]:
+    """Derive a Nano keypair from a 32-byte seed and BIP32-like index."""
+    data = seed + struct.pack(">I", index)
+    priv_seed = hashlib.blake2b(data, digest_size=32).digest()
+    sk = ed25519_blake2b.SigningKey(priv_seed)
+    vk = sk.get_verifying_key()
+    return sk, vk.to_bytes()
+
+
+def sign_message(sk: ed25519_blake2b.SigningKey, message: bytes) -> bytes:
+    return sk.sign(message)
+
+
+def verify_signature(pubkey: bytes, message: bytes, signature: bytes) -> bool:
+    try:
+        vk = ed25519_blake2b.VerifyingKey(pubkey)
+        vk.verify(signature, message)
+        return True
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Ed25519 scalar/point helpers for stealth addresses and pool keys
+# ---------------------------------------------------------------------------
+
+def scalar_reduce(hash_bytes: bytes) -> bytes:
+    """Reduce 64 bytes to a valid Ed25519 scalar."""
+    return nacl.bindings.crypto_core_ed25519_scalar_reduce(hash_bytes)
+
+
+def scalar_from_seed(seed: bytes) -> bytes:
+    """Clamp the Blake2b-512 hash of a seed to produce an Ed25519 scalar."""
+    h = blake2b_512(seed)
+    return nacl.bindings.crypto_core_ed25519_scalar_reduce(h)
+
+
+def pubkey_from_scalar(scalar: bytes) -> bytes:
+    """Compute public key point from scalar (scalar * G)."""
+    return nacl.bindings.crypto_scalarmult_ed25519_base_noclamp(scalar)
+
+
+def point_add(p: bytes, q: bytes) -> bytes:
+    return nacl.bindings.crypto_core_ed25519_add(p, q)
+
+
+def scalar_multiply(scalar: bytes, point: bytes) -> bytes:
+    """Compute scalar * point without clamping."""
+    return nacl.bindings.crypto_scalarmult_ed25519_noclamp(scalar, point)
+
+
+def scalar_add(a: bytes, b: bytes) -> bytes:
+    return nacl.bindings.crypto_core_ed25519_scalar_add(a, b)
+
+
+def is_valid_point(point: bytes) -> bool:
+    return nacl.bindings.crypto_core_ed25519_is_valid_point(point)
+
+
+# ---------------------------------------------------------------------------
+# Stealth addresses
+# ---------------------------------------------------------------------------
+
+def derive_view_spend(seed_view: bytes) -> Tuple[bytes, bytes, bytes, bytes]:
+    """Return (a, A, b, B) from view seed."""
+    a = scalar_from_seed(seed_view + b"scan")
+    A = pubkey_from_scalar(a)
+    b = scalar_from_seed(seed_view + b"spend")
+    B = pubkey_from_scalar(b)
+    return a, A, b, B
+
+
+def stealth_address(A: bytes, B: bytes, r: Optional[bytes] = None) -> Tuple[bytes, bytes, bytes]:
+    """Generate (R, P, H_s)."""
+    if r is None:
+        r = scalar_from_seed(os.urandom(64))
+    R = pubkey_from_scalar(r)
+    rA = scalar_multiply(r, A)
+    shared = blake2b_256(DOMAIN_STEALTH + rA)
+    H_s = scalar_reduce(shared + shared)
+    Hs_G = pubkey_from_scalar(H_s)
+    P = point_add(Hs_G, B)
+    return R, P, H_s
+
+
+def scan_stealth(a: bytes, b: bytes, R: bytes) -> Tuple[bytes, bytes]:
+    """Scan tag R and return (P, p_scalar)."""
+    aR = scalar_multiply(a, R)
+    shared = blake2b_256(DOMAIN_STEALTH + aR)
+    H_s = scalar_reduce(shared + shared)
+    p = scalar_add(H_s, b)
+    P = pubkey_from_scalar(p)
+    return P, p
+
+
+def sign_with_scalar(message: bytes, scalar: bytes, pubkey: bytes) -> bytes:
+    """
+    Sign a message with a raw Ed25519 scalar using Blake2b (Nano variant).
+    This is needed for one-time stealth keys where we know the scalar but
+    not a seed that hashes to it.
+    """
+    # r = reduce(Blake2b(prefix || message)) where prefix = Blake2b(scalar)[32:]
+    prefix = blake2b_512(scalar)[32:]
+    r = int.from_bytes(
+        nacl.bindings.crypto_core_ed25519_scalar_reduce(blake2b_512(prefix + message)),
+        "little",
+    )
+    R = pubkey_from_scalar(r.to_bytes(32, "little"))
+    h = int.from_bytes(
+        nacl.bindings.crypto_core_ed25519_scalar_reduce(blake2b_512(R + pubkey + message)),
+        "little",
+    )
+    s = (r + h * int.from_bytes(scalar, "little")) % ED25519_L
+    return R + s.to_bytes(32, "little")
+
+
+# ---------------------------------------------------------------------------
+# Pool / protocol accounts
+# ---------------------------------------------------------------------------
+
+def hash_to_edwards(data: bytes, max_attempts: int = 10000) -> bytes:
+    counter = 0
+    while counter < max_attempts:
+        h = blake2b_256(data + counter.to_bytes(4, "big"))
+        if is_valid_point(h):
+            return h
+        counter += 1
+    raise RuntimeError("Failed to find valid Ed25519 point")
+
+
+def pool_pubkey(denomination: int) -> bytes:
+    return hash_to_edwards(b"vela/v2/pool" + str(denomination).encode())
+
+
+def pool_address(denomination: int) -> str:
+    return nano_address_from_pubkey(pool_pubkey(denomination))
+
+
+def protocol_data_account() -> str:
+    return nano_address_from_pubkey(hash_to_edwards(DOMAIN_DATA + PROTOCOL_TAG))
+
+
+# ---------------------------------------------------------------------------
+# Commitments and nullifiers
+# ---------------------------------------------------------------------------
+
+def find_valid_commitment(n: bytes, P_w: bytes, S_pub: bytes, max_attempts: int = 10000) -> Tuple[bytes, bytes]:
+    for _ in range(max_attempts):
+        t = os.urandom(32)
+        C = blake2b_256(DOMAIN_DEPOSIT + PROTOCOL_TAG + n + t + P_w + S_pub)
+        if is_valid_point(C):
+            return t, C
+    raise RuntimeError("Failed to find valid commitment point")
+
+
+def compute_commitment(n: bytes, t: bytes, P_w: bytes, S_pub: bytes) -> bytes:
+    return blake2b_256(DOMAIN_DEPOSIT + PROTOCOL_TAG + n + t + P_w + S_pub)
+
+
+def compute_nullifier(n: bytes) -> bytes:
+    return blake2b_256(DOMAIN_NULL + PROTOCOL_TAG + n)
+
+
+# ---------------------------------------------------------------------------
+# Nano state block helpers
+# ---------------------------------------------------------------------------
+
+def nano_state_block_hash(
+    account: bytes,
+    previous: bytes,
+    representative: bytes,
+    balance: int,
+    link: bytes,
+) -> bytes:
+    """Hash a Nano state block (preamble 0x06, then account, previous, rep, balance, link)."""
+    preamble = b"\x06"
+    balance_bytes = balance.to_bytes(16, "big")
+    data = preamble + account + previous + representative + balance_bytes + link
+    return hashlib.blake2b(data, digest_size=32).digest()
+
+
+def sign_block(sk: ed25519_blake2b.SigningKey, block_hash: bytes) -> bytes:
+    return sk.sign(block_hash)
+
+
+def raw_to_nano(raw: int) -> float:
+    return raw / 1e30
+
+
+def nano_to_raw(xno: float) -> int:
+    return int(xno * 1e30)
