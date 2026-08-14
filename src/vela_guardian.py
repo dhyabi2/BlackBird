@@ -9,6 +9,7 @@ proofs. The guardian sees the source public key. Production must use
 FROST threshold signing and a Circom Groth16 proof.
 """
 
+import hashlib
 import json
 import os
 import struct
@@ -168,12 +169,13 @@ class VelaGuardian:
         """Verify a Merkle proof against root."""
         path = [bytes.fromhex(x) for x in proof["path"]]
         indices = proof["indices"]
-        current = hashlib.blake2b(C + bytes(32), digest_size=32).digest()
+        current = C
         for sibling, is_right in zip(path, indices):
-            if is_right:
-                current = hashlib.blake2b(sibling + current, digest_size=32).digest()
+            if sibling < current:
+                a, b = sibling, current
             else:
-                current = hashlib.blake2b(current + sibling, digest_size=32).digest()
+                a, b = current, sibling
+            current = hashlib.blake2b(a + b, digest_size=32).digest()
         return current == root
 
     def _get_account_info(self, address: str) -> dict:
@@ -197,12 +199,11 @@ class VelaGuardian:
             return {"error": f"pool account info failed: {info['error']}"}
 
         balance = int(info["balance"])
-        if balance < denomination:
-            return {"error": "insufficient pool balance"}
-
         previous = bytes.fromhex(info["frontier"])
-        representative = bytes.fromhex(nano_pubkey_from_address(info["representative"]))
+        representative = nano_pubkey_from_address(info["representative"])
         new_balance = balance - (denomination - WITHDRAW_FEE_RAW)
+        if new_balance < 0:
+            return {"error": "insufficient pool balance"}
 
         block_hash = nano_state_block_hash(
             self.pool_pub,
@@ -228,7 +229,7 @@ class VelaGuardian:
         # For prototype, return the signed block; user can broadcast via own node or compute work
         self.spent_nullifiers.add(N)
         self._save_state()
-        return {"ok": True, "block": block, "nullifier": N.hex()}
+        return {"ok": True, "block": block, "block_hash": block_hash.hex(), "nullifier": N.hex()}
 
 
 def create_app(guardian: VelaGuardian) -> Flask:

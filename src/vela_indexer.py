@@ -213,6 +213,8 @@ class VelaIndexer:
                 return None
 
             epoch = int(dep.get("local_timestamp", time.time())) // EPOCH_SECONDS
+            if epoch < 0:
+                epoch = int(time.time()) // EPOCH_SECONDS
             return {
                 "source": dep_block["account"],
                 "denomination": amount_raw,

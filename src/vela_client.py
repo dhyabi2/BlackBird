@@ -198,7 +198,27 @@ def cmd_withdraw(args):
 
     guardian_url = args.guardian_url
     resp = requests.post(f"{guardian_url}/withdraw", json=req, timeout=30)
-    print(resp.text)
+    result = resp.json()
+    if "error" in result:
+        print(json.dumps(result, indent=2))
+        return
+
+    block = result["block"]
+    if args.broadcast and not args.no_pow:
+        block_hash = bytes.fromhex(result.get("block_hash", ""))
+        if not block_hash:
+            # Recompute hash from block fields
+            account = nano_pubkey_from_address(block["account"])
+            previous = bytes.fromhex(block["previous"])
+            rep = nano_pubkey_from_address(block["representative"])
+            balance = int(block["balance"])
+            link = bytes.fromhex(block["link"])
+            block_hash = nano_state_block_hash(account, previous, rep, balance, link)
+        block["work"] = compute_pow(block_hash)
+        rpc = NanoRPC()
+        broadcast_result = rpc.call("process", {"json_block": "true", "block": block})
+        result["broadcast"] = broadcast_result
+    print(json.dumps(result, indent=2))
 
 
 def main():
@@ -224,6 +244,8 @@ def main():
     wit.add_argument("epoch", type=int)
     wit.add_argument("--indexer-url", default="http://127.0.0.1:8080")
     wit.add_argument("--guardian-url", default="http://127.0.0.1:8081")
+    wit.add_argument("--broadcast", action="store_true", help="Compute PoW and broadcast withdrawal block")
+    wit.add_argument("--no-pow", action="store_true", help="Skip PoW computation")
 
     args = parser.parse_args()
     if args.command == "generate":

@@ -21,7 +21,9 @@ mkdir -p /var/lib/tor/vela_indexer /var/lib/tor/vela_guardian
 chown -R debian-tor:debian-tor /var/lib/tor/vela_indexer /var/lib/tor/vela_guardian
 chmod 700 /var/lib/tor/vela_indexer /var/lib/tor/vela_guardian
 
-cat >> /etc/tor/torrc <<'EOF'
+TORRC=/etc/tor/torrc
+if ! grep -q "HiddenServiceDir /var/lib/tor/vela_indexer" "$TORRC"; then
+    cat >> "$TORRC" <<'EOF'
 HiddenServiceDir /var/lib/tor/vela_indexer
 HiddenServicePort 80 127.0.0.1:8080
 HiddenServicePort 22 127.0.0.1:22
@@ -29,6 +31,7 @@ HiddenServicePort 22 127.0.0.1:22
 HiddenServiceDir /var/lib/tor/vela_guardian
 HiddenServicePort 80 127.0.0.1:8081
 EOF
+fi
 
 systemctl restart tor
 

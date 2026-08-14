@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+
+# Data / state
+data/
+*.log
+
+# Node
+node_modules/
+
+# Circom build artifacts (keep r1cs/wasm/sym; ignore large ceremony files)
+circuit/build/*.ptau
+circuit/build/*.zkey
+circuit/build/vela_js/witness.wtns
+
+# Environment
+.env
+.guardian_seed
+
+# IDE
+.vscode/
+.idea/
