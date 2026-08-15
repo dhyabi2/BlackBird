@@ -241,7 +241,13 @@ def create_app(indexer: VelaIndexer) -> Flask:
                 "publicSignals": data["publicSignals"],
             }
             resp = requests.post(f"{GUARDIAN_URL}/withdraw", json=guardian_req, timeout=30)
-            return (resp.text, resp.status_code, resp.headers.items())
+            try:
+                body = resp.json()
+            except Exception:
+                body = {"error": resp.text}
+            if not resp.ok:
+                return jsonify(body), resp.status_code
+            return jsonify(body)
         except Exception as e:
             return jsonify({"error": str(e)}), 400
 

@@ -195,15 +195,24 @@ export default function WalletPage() {
       }
       log("Proof generated");
 
-      const withdrawRes = await apiPost("/api/withdraw", {
+      const withdrawRes = (await apiPost("/api/withdraw", {
         destination: withdraw.address,
         epoch: status.epoch,
         denomination: denom,
         nullifier: nullifier.toString(16),
         proof: proofRes.proof,
         publicSignals: proofRes.publicSignals,
-      }) as { block_hash?: string };
-      log(`Withdrawal submitted: ${withdrawRes.block_hash || "ok"}`);
+      })) as { ok?: boolean; block_hash?: string; block?: Record<string, unknown> };
+
+      if (!withdrawRes.block || !withdrawRes.block_hash) {
+        throw new Error("Guardian did not return a block");
+      }
+      log(`Guardian signed withdrawal: ${withdrawRes.block_hash}`);
+
+      const work = await fetchWork(withdrawRes.block_hash);
+      const signedBlock = { ...withdrawRes.block, work };
+      await broadcastBlock(signedBlock);
+      log("Withdrawal broadcasted");
     } catch (err) {
       log(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
