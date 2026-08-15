@@ -181,14 +181,33 @@ Guardians expose their partial-signature endpoints as public HTTPS or Tor hidden
 
 ### Coordinator
 
-The coordinator:
+The coordinator is an optional helper, not a trusted gatekeeper. The default mode is **client-as-aggregator**: the withdrawing client collects partial signatures and broadcasts the final Nano block itself. Any third-party coordinator is only a relay.
 
-- Sends the same withdrawal request to at least `t` guardians.
-- Collects partial signatures.
-- Aggregates them into a full Ed25519-blake2b signature.
-- Attaches the signature to the withdrawal block and broadcasts it.
+A coordinator may:
 
-The coordinator is untrusted. It cannot produce a valid signature without `t` guardians, and it cannot forge a withdrawal because each guardian verifies the proof independently.
+- Forward the withdrawal request to at least `t` guardians.
+- Collect and return partial signatures to the client.
+- Optionally aggregate and broadcast if the client delegates that step.
+
+The coordinator **cannot**:
+
+- Forge a signature (needs `t` guardians).
+- Alter the recipient `P_w` after signatures are collected, because every partial signature is computed over the exact Nano block hash, which includes `P_w`.
+- Censor a withdrawal permanently, because the client can contact guardians directly or use a different coordinator.
+
+### Binding the recipient to the FROST message
+
+To prevent front-running, the recipient `P_w` is bound to the signed message at three layers:
+
+1. **ZK public signals**: the Groth16 public inputs include `P_w_lo` and `P_w_hi`, so the proof is valid only for that recipient.
+2. **Withdrawal intent hash**: the client sends `H(P_w, nonce)` as part of the request; guardians verify that the Nano block they sign contains the matching `P_w`.
+3. **FROST message**: guardians sign the hash of the fully assembled Nano withdrawal block, which encodes `P_w`. Changing `P_w` invalidates every partial signature.
+
+### Parallel coordinators and races
+
+Multiple coordinators may operate at once. A client can simultaneously submit the same withdrawal request to several coordinators and collect partial signatures from any `t` guardians. The first valid Nano block confirmed by the network spends the nullifier; later competing blocks with the same nullifier are rejected by guardians because the nullifier is already spent.
+
+This race is not harmful to the withdrawing client: the confirmed block must use the `P_w` bound in the proof and intent hash, so an honest client's funds always arrive at the intended address.
 
 ---
 
@@ -197,16 +216,18 @@ The coordinator is untrusted. It cannot produce a valid signature without `t` gu
 1. The client reads the accepted Merkle root for the deposit's epoch and denomination.
 2. The client fetches the inclusion proof for its commitment `C`.
 3. The client generates a Groth16 proof with public inputs `(root, nullifier, P_w_lo, P_w_hi)` and private inputs `(n, t, S_pub, path, leafIndex)`.
-4. The client sends the withdrawal request `(proof, publicSignals, P_w, epoch, denomination)` to at least `t` guardians (directly or via a coordinator).
-5. Each guardian verifies:
+4. The client assembles the unsigned Nano withdrawal block with recipient `P_w` and computes the withdrawal intent hash `H(P_w, nonce)`.
+5. The client sends the withdrawal request `(proof, publicSignals, P_w, nonce, intent_hash, unsigned_block, epoch, denomination)` to at least `t` guardians (directly or via a coordinator).
+6. Each guardian verifies:
    - the Groth16 proof;
    - that the root is accepted;
    - that the nullifier is unspent;
-   - that `P_w` matches the public signals.
-6. Each honest guardian returns a partial signature over the withdrawal block hash.
-7. The coordinator aggregates `t` partial signatures into the final signature.
-8. The coordinator broadcasts the signed withdrawal block to Nano.
-9. Nano confirms the withdrawal; the nullifier is now spent.
+   - that `P_w` matches the public signals and the intent hash;
+   - that the unsigned block encodes the correct `P_w`.
+7. Each honest guardian returns a partial signature over the unsigned withdrawal block hash.
+8. The client (or a delegated coordinator) aggregates `t` partial signatures into the final Ed25519-blake2b signature.
+9. The final block is broadcast to Nano.
+10. Nano confirms the withdrawal; the nullifier is now spent.
 
 ---
 
@@ -215,7 +236,8 @@ The coordinator is untrusted. It cannot produce a valid signature without `t` gu
 - **Deposits** need only Nano liveness; no indexer or guardian can block them.
 - **Roots** are deterministic; a client can compute its own root from public Nano data if all indexers fail.
 - **Withdrawals** cannot be blocked by a single guardian because any `t-of-n` subset can sign.
-- **Coordinator** can be any party, including the withdrawer. There is no mandatory coordinator.
+- **Coordinator** is optional and untrusted. The client can aggregate signatures and broadcast itself; any third-party coordinator is only a relay. A coordinator cannot alter `P_w` because partial signatures are bound to the exact Nano block hash.
+- **Front-running** is prevented by binding `P_w` into the Groth16 public signals, the withdrawal intent hash, and the FROST-signed block hash.
 - **Transport** over Tor hidden services hides operator locations and resists IP-level blocking.
 
 ---
