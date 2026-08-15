@@ -17,7 +17,16 @@ declare module "nanocurrency" {
   ): { hash: string; block: Record<string, unknown> };
   export function convert(
     value: string | number,
-    from: "NANO" | "RAW",
-    to: "NANO" | "RAW"
+    params: { from: string; to: string }
   ): string;
+  export enum Unit {
+    hex = "hex",
+    raw = "raw",
+    nano = "nano",
+    knano = "knano",
+    Nano = "Nano",
+    NANO = "NANO",
+    KNano = "KNano",
+    MNano = "MNano",
+  }
 }
