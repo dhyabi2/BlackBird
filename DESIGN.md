@@ -153,11 +153,35 @@ Indexers are stateless, deterministic services. Any honest indexer watching the 
 Roots are published in two ways:
 
 1. **API**: each indexer exposes `/root/<epoch>/<denom>` and `/proof/<epoch>/<denom>?C=<hex>`.
-2. **On-chain (optional)**: indexers publish root blocks on Nano for censorship-resistant availability.
+2. **On-chain**: each indexer publishes a `RootCommit` transaction on Nano for censorship-resistant availability and deterministic discovery.
 
-### Client validation
+A `RootCommit` transaction is a 0-value Nano state block sent by the indexer account to a protocol-defined publication address. It encodes:
 
-A client should query multiple independent indexers and accept a root only if a majority agree. Roots are deterministic, so any divergence indicates a faulty or malicious indexer.
+| Field | Size | Meaning |
+|-------|------|---------|
+| `epoch` | 4 bytes | Epoch number |
+| `denomination` | 8 bytes | Denomination in raw |
+| `root` | 32 bytes | Poseidon Merkle root |
+| `batch_commitment` | 32 bytes | Poseidon hash of ordered deposit-block hashes included |
+| `prev_root_hash` | 32 bytes | Hash of the previous RootCommit this indexer extended |
+
+Fields are packed into the available block data fields (e.g., `representative` or `link`) using a fixed encoding. Because RootCommit transactions are signed by the indexer and live on the Nano ledger, they provide:
+
+- Immutable publication
+- Censorship resistance
+- Automatic indexer discovery (scan all senders to the publication address)
+- Canonical ordering by confirmation height
+
+### Root consensus
+
+A client determines the canonical root for an epoch/denomination by:
+
+1. Scanning RootCommit transactions from multiple indexer accounts.
+2. Grouping roots by value.
+3. Accepting the root that is published by a majority of known indexers.
+4. Recomputing the root independently from public Nano data and verifying it matches.
+
+If roots disagree, the client waits for more RootCommit transactions or recomputes the root itself from the ledger. Because root computation is deterministic, any divergence is attributable to a faulty or malicious indexer.
 
 ---
 
@@ -174,6 +198,26 @@ The guardian network is a `t-of-n` FROST threshold signer set. The pool public k
 ### FROST ciphersuite
 
 Because Nano uses Ed25519-blake2b, the FROST implementation must use Blake2b for all internal hashes (nonce derivation, challenge computation). Standard Ed25519-SHA512 FROST libraries are incompatible with Nano.
+
+To maximize assurance, the implementation is built on the audited **`frost-core`** crate and the well-tested **`frost-ed25519`** reference ciphersuite, with the following minimal substitutions to target Ed25519-blake2b:
+
+| FROST internal hash | Default (SHA-512) | VELA (Blake2b) |
+|---------------------|-------------------|----------------|
+| Randomizer derivation (`hash_randomizer`) | BLAKE2b-512 / H3 context | BLAKE2b-512 with protocol-specific context string |
+| Nonce derivation (`generate_nonce`) | BLAKE2b-512 / H3 context | BLAKE2b-512 with protocol-specific context string |
+| Challenge computation (`challenge`) | BLAKE2b-512 / H2 context | BLAKE2b-512 with protocol-specific context string |
+
+This limits the unaudited surface to the hash-function substitutions and the context strings, rather than a from-scratch FROST implementation. The ciphersuite uses:
+
+- Ed25519 group operations unchanged from `frost-ed25519`.
+- SHA-512 replaced by Blake2b-512 only where the Ed25519-blake2b variant requires it.
+- Distinct context strings (e.g., `"VELA.frost-ed25519-blake2b-v1"`) to prevent cross-protocol replay.
+
+### Key generation and share refresh
+
+For the prototype, a **trusted dealer** distributes FROST shares to guardians. The dealer is trusted only at setup; it does not participate in signing and is destroyed after distribution. This lets the protocol use `frost-core`'s verifiable share generation and avoids the complexity of a production DKG before the ciphersuite is fully audited.
+
+Periodic **share refresh** is planned and will reuse the same trusted-dealer or a lightweight proactive-refresh ceremony; the design defers the full DKG ceremony until after the Ed25519-blake2b ciphersuite has been independently reviewed.
 
 ### Network communication
 
