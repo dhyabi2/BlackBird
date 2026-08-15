@@ -54,10 +54,16 @@ async function apiPost(path, body) {
   return data;
 }
 
-async function fetchWork(hash) {
-  const data = await apiPost("/api/work", { hash, difficulty: "fffffff800000000" });
-  if (!data.work) throw new Error("work_generate failed");
-  return data.work;
+const SEND_THRESHOLD = "fffffff800000000";
+const RECEIVE_THRESHOLD = "fffffe0000000000";
+
+function workHashForReceive(previous, publicKey) {
+  // For the first (open) receive block, work is generated on the account public key.
+  return previous === ZERO_HASH ? publicKey : previous;
+}
+
+async function computeWork(hash, threshold) {
+  return nano.computeWork(hash, { workThreshold: threshold });
 }
 
 async function fetchAccountInfo(account) {
@@ -70,6 +76,17 @@ async function fetchPending(account) {
 
 async function broadcastBlock(block) {
   return apiPost("/api/broadcast", { block });
+}
+
+async function fetchAccountHistoryDirect(account) {
+  const res = await fetch("https://node.somenano.com/proxy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "account_history", account, count: 100 }),
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(`account_history error: ${JSON.stringify(data.error)}`);
+  return data.history || [];
 }
 
 function sleep(ms) {
@@ -132,7 +149,7 @@ async function cmdReceiveFunding() {
   }
   console.log(`Found pending send ${sendHash} with amount ${amountRaw} raw`);
 
-  const work = await fetchWork(ZERO_HASH);
+  const work = await computeWork(workHashForReceive(ZERO_HASH, funding.publicKey), RECEIVE_THRESHOLD);
   const receiveBlock = buildBlock(funding.secretKey, {
     previous: ZERO_HASH,
     representative: funding.address,
@@ -145,23 +162,52 @@ async function cmdReceiveFunding() {
   console.log("Funding receive broadcasted.");
 }
 
+async function reconstructSendHashesFromHistory(data) {
+  const { funding, receivers } = data;
+  const history = await fetchAccountHistoryDirect(funding.address);
+  const sends = history.filter((h) => h.type === "send");
+  const newSendHashes = [];
+  for (const receiver of receivers) {
+    const found = sends.find((h) => h.account === receiver.address);
+    if (found) {
+      newSendHashes.push({ address: receiver.address, hash: found.hash });
+    } else {
+      break;
+    }
+  }
+  data.sendHashes = newSendHashes;
+  saveWallets(data);
+  return newSendHashes.length;
+}
+
 async function cmdSplit() {
-  const { funding, receivers } = loadWallets();
+  const data = loadWallets();
+  const { funding, receivers } = data;
   const info = await fetchAccountInfo(funding.address);
   if (!info.frontier) throw new Error("Funding account not opened");
+
+  // Recover any sends already confirmed on-chain.
+  await reconstructSendHashesFromHistory(data);
+  const sendHashes = data.sendHashes || [];
+
   const amountRaw = nano.convert("0.1", { from: "NANO", to: "raw" });
-  const totalRaw = (BigInt(amountRaw) * BigInt(receivers.length)).toString();
+  const startIndex = sendHashes.length;
+  const remaining = receivers.length - startIndex;
+  if (remaining === 0) {
+    console.log("All sends already broadcasted.");
+    return;
+  }
+  const requiredRaw = BigInt(amountRaw) * BigInt(remaining);
   const startBalance = BigInt(info.balance);
-  if (startBalance < BigInt(totalRaw)) {
+  if (startBalance < requiredRaw) {
     throw new Error(
-      `Funding balance ${startBalance} raw is less than required ${totalRaw} raw`
+      `Funding balance ${startBalance} raw is less than required ${requiredRaw} raw for ${remaining} remaining sends`
     );
   }
 
   let previous = info.frontier;
   let balance = startBalance;
-  const sendHashes = [];
-  for (let i = 0; i < receivers.length; i++) {
+  for (let i = startIndex; i < receivers.length; i++) {
     const receiver = receivers[i];
     balance -= BigInt(amountRaw);
     const sendBlock = buildBlock(funding.secretKey, {
@@ -169,16 +215,31 @@ async function cmdSplit() {
       representative: funding.address,
       balance: balance.toString(),
       link: receiver.address,
-      work: await fetchWork(previous),
+      work: await computeWork(previous, SEND_THRESHOLD),
     });
     console.log(`Send ${i + 1}/${receivers.length} to ${receiver.address}: ${sendBlock.hash}`);
-    await broadcastBlock(sendBlock.block);
+    try {
+      await broadcastBlock(sendBlock.block);
+    } catch (err) {
+      if (String(err.message).includes("Old block")) {
+        // The block may already be confirmed; recover its hash from history.
+        const history = await fetchAccountHistoryDirect(funding.address);
+        const found = history.find((h) => h.type === "send" && h.account === receiver.address);
+        if (!found) throw err;
+        console.log(`  already on-chain, using ${found.hash}`);
+        sendHashes.push({ address: receiver.address, hash: found.hash });
+        data.sendHashes = sendHashes;
+        saveWallets(data);
+        previous = found.hash;
+        continue;
+      }
+      throw err;
+    }
     sendHashes.push({ address: receiver.address, hash: sendBlock.hash });
+    data.sendHashes = sendHashes;
+    saveWallets(data);
     previous = sendBlock.hash;
   }
-  const data = loadWallets();
-  data.sendHashes = sendHashes;
-  saveWallets(data);
   console.log("All 10 sends broadcasted.");
 }
 
@@ -192,7 +253,7 @@ async function cmdReceiveSplit() {
     const receiver = receivers[i];
     const sendHash = sendHashes[i].hash;
     console.log(`Receiving ${i + 1}/${receivers.length} for ${receiver.address} ...`);
-    const work = await fetchWork(ZERO_HASH);
+    const work = await computeWork(workHashForReceive(ZERO_HASH, receiver.publicKey), RECEIVE_THRESHOLD);
     const receiveBlock = buildBlock(receiver.secretKey, {
       previous: ZERO_HASH,
       representative: receiver.address,
