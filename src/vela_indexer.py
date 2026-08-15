@@ -3,6 +3,10 @@ VELA v2 Indexer.
 
 Tracks pool deposits and commitments, builds per-epoch Poseidon Merkle trees,
 and serves roots/proofs to clients.
+
+The production design runs multiple independent indexers whose roots are
+expected to agree deterministically. Clients query several indexers and accept
+a root only if a majority match. See DESIGN.md for the full architecture.
 """
 import json
 import os

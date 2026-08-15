@@ -3,7 +3,7 @@ pragma circom 2.1.6;
 include "../node_modules/circomlib/circuits/poseidon.circom";
 include "../node_modules/circomlib/circuits/mux1.circom";
 
-// VELA v2 deposit/withdrawal circuit (prototype).
+// VELA v2 deposit/withdrawal circuit.
 // Public inputs:  root, nullifier, P_w (encoded as two field elements)
 // Private inputs: n (nullifier secret), t (trapdoor), S_pub (source pubkey),
 //                 leafIndex[DEPTH], path[DEPTH]

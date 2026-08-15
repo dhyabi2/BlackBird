@@ -1,0 +1,232 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI"
+             id="VELA_v2_threshold"
+             targetNamespace="http://vela.protocol"
+             exporter="Kimi Code CLI"
+             exporterVersion="1.0">
+
+  <collaboration id="Collaboration_1">
+    <participant id="Participant_Depositor" name="Depositor" processRef="Process_Depositor"/>
+    <participant id="Participant_Ledger" name="Nano Ledger" processRef="Process_Ledger"/>
+    <participant id="Participant_Indexer" name="Indexer Network" processRef="Process_Indexer"/>
+    <participant id="Participant_Guardian" name="Guardian Network (t-of-n FROST)" processRef="Process_Guardian"/>
+    <participant id="Participant_Coordinator" name="Withdrawer / Coordinator" processRef="Process_Coordinator"/>
+
+    <!-- Deposit phase message flows -->
+    <messageFlow id="MF_DepositBlock" sourceRef="Task_BroadcastDeposit" targetRef="Start_DepositReceived"/>
+    <messageFlow id="MF_CommitBlock" sourceRef="Task_BroadcastCommitment" targetRef="Start_CommitmentReceived"/>
+
+    <!-- Ledger to indexer -->
+    <messageFlow id="MF_LedgerToIndexer" sourceRef="Task_ConfirmedOnChain" targetRef="Start_IndexerScan"/>
+
+    <!-- Indexer to coordinator -->
+    <messageFlow id="MF_RootToCoordinator" sourceRef="Task_PublishRoot" targetRef="Task_FetchRoot"/>
+    <messageFlow id="MF_ProofToCoordinator" sourceRef="Task_ServeProof" targetRef="Task_FetchProof"/>
+
+    <!-- Coordinator to guardians -->
+    <messageFlow id="MF_RequestToGuardian" sourceRef="Task_RequestPartialSig" targetRef="Start_PartialSigRequest"/>
+    <messageFlow id="MF_PartialSigToCoordinator" sourceRef="Task_ReturnPartialSig" targetRef="Task_CollectPartialSigs"/>
+
+    <!-- Coordinator to ledger -->
+    <messageFlow id="MF_WithdrawBlock" sourceRef="Task_BroadcastWithdrawal" targetRef="Start_WithdrawalReceived"/>
+  </collaboration>
+
+  <!-- ============================================================ -->
+  <!-- Depositor Process                                            -->
+  <!-- ============================================================ -->
+  <process id="Process_Depositor" isExecutable="false">
+    <startEvent id="Start_Deposit" name="User wants to deposit"/>
+    <task id="Task_DeriveStealth" name="Derive stealth withdrawal address P_w"/>
+    <task id="Task_GenerateSecrets" name="Generate secrets n and t"/>
+    <task id="Task_ComputeCommitment" name="Compute C = Poseidon(n, t, P_w, S_pub)"/>
+    <task id="Task_CreateDepositBlock" name="Create deposit block S → Pool"/>
+    <task id="Task_BroadcastDeposit" name="Broadcast deposit block to Nano network"/>
+    <task id="Task_CreateCommitmentBlock" name="Create commitment block with link = C"/>
+    <task id="Task_BroadcastCommitment" name="Broadcast commitment block to Nano network"/>
+    <endEvent id="End_DepositDone" name="Deposit published"/>
+
+    <sequenceFlow id="D1" sourceRef="Start_Deposit" targetRef="Task_DeriveStealth"/>
+    <sequenceFlow id="D2" sourceRef="Task_DeriveStealth" targetRef="Task_GenerateSecrets"/>
+    <sequenceFlow id="D3" sourceRef="Task_GenerateSecrets" targetRef="Task_ComputeCommitment"/>
+    <sequenceFlow id="D4" sourceRef="Task_ComputeCommitment" targetRef="Task_CreateDepositBlock"/>
+    <sequenceFlow id="D5" sourceRef="Task_CreateDepositBlock" targetRef="Task_BroadcastDeposit"/>
+    <sequenceFlow id="D6" sourceRef="Task_BroadcastDeposit" targetRef="Task_CreateCommitmentBlock"/>
+    <sequenceFlow id="D7" sourceRef="Task_CreateCommitmentBlock" targetRef="Task_BroadcastCommitment"/>
+    <sequenceFlow id="D8" sourceRef="Task_BroadcastCommitment" targetRef="End_DepositDone"/>
+  </process>
+
+  <!-- ============================================================ -->
+  <!-- Nano Ledger Process                                          -->
+  <!-- ============================================================ -->
+  <process id="Process_Ledger" isExecutable="false">
+    <startEvent id="Start_DepositReceived" name="Deposit block received"/>
+    <task id="Task_ValidateDeposit" name="Validate state block and signature"/>
+    <startEvent id="Start_CommitmentReceived" name="Commitment block received"/>
+    <task id="Task_ValidateCommitment" name="Validate state block and link"/>
+    <task id="Task_ConfirmedOnChain" name="Confirm blocks via ORV consensus"/>
+    <startEvent id="Start_WithdrawalReceived" name="Withdrawal block received"/>
+    <task id="Task_ValidateWithdrawal" name="Validate signature and account state"/>
+    <endEvent id="End_LedgerDeposit" name="Deposit/commitment confirmed"/>
+    <endEvent id="End_LedgerWithdrawal" name="Withdrawal confirmed"/>
+
+    <sequenceFlow id="L1" sourceRef="Start_DepositReceived" targetRef="Task_ValidateDeposit"/>
+    <sequenceFlow id="L2" sourceRef="Start_CommitmentReceived" targetRef="Task_ValidateCommitment"/>
+    <sequenceFlow id="L3" sourceRef="Task_ValidateDeposit" targetRef="Task_ConfirmedOnChain"/>
+    <sequenceFlow id="L4" sourceRef="Task_ValidateCommitment" targetRef="Task_ConfirmedOnChain"/>
+    <sequenceFlow id="L5" sourceRef="Task_ConfirmedOnChain" targetRef="End_LedgerDeposit"/>
+    <sequenceFlow id="L6" sourceRef="Start_WithdrawalReceived" targetRef="Task_ValidateWithdrawal"/>
+    <sequenceFlow id="L7" sourceRef="Task_ValidateWithdrawal" targetRef="End_LedgerWithdrawal"/>
+  </process>
+
+  <!-- ============================================================ -->
+  <!-- Indexer Network Process                                      -->
+  <!-- ============================================================ -->
+  <process id="Process_Indexer" isExecutable="false">
+    <laneSet id="LaneSet_Indexer">
+      <lane id="Lane_IndexerA" name="Indexer A">
+        <flowNodeRef>Start_IndexerScan</flowNodeRef>
+        <flowNodeRef>Task_QueryBlocksA</flowNodeRef>
+        <flowNodeRef>Task_ValidatePairA</flowNodeRef>
+        <flowNodeRef>Gateway_ValidPairA</flowNodeRef>
+        <flowNodeRef>Task_ComputeLeafA</flowNodeRef>
+        <flowNodeRef>Task_InsertTreeA</flowNodeRef>
+        <flowNodeRef>Task_ComputeRootA</flowNodeRef>
+        <flowNodeRef>Task_CompareRootsA</flowNodeRef>
+        <flowNodeRef>Task_PublishRoot</flowNodeRef>
+        <flowNodeRef>Task_ServeProof</flowNodeRef>
+        <flowNodeRef>End_IndexerAccepted</flowNodeRef>
+        <flowNodeRef>End_IndexerRejected</flowNodeRef>
+      </lane>
+    </laneSet>
+
+    <startEvent id="Start_IndexerScan" name="New confirmed blocks"/>
+    <task id="Task_QueryBlocksA" name="Query blocks_info for deposit/commitment pair"/>
+    <task id="Task_ValidatePairA" name="Validate deposit → pool and commitment link"/>
+    <exclusiveGateway id="Gateway_ValidPairA" name="Valid pair?"/>
+    <task id="Task_ComputeLeafA" name="Compute leaf = Poseidon(C, 0)"/>
+    <task id="Task_InsertTreeA" name="Insert leaf into epoch Merkle tree"/>
+    <task id="Task_ComputeRootA" name="Compute Merkle root deterministically"/>
+    <task id="Task_CompareRootsA" name="Compare root with other indexers"/>
+    <exclusiveGateway id="Gateway_RootAgree" name="Majority agree?"/>
+    <task id="Task_PublishRoot" name="Publish root via API and optionally on-chain"/>
+    <task id="Task_ServeProof" name="Serve inclusion proof for C"/>
+    <endEvent id="End_IndexerAccepted" name="Root accepted"/>
+    <endEvent id="End_IndexerRejected" name="Invalid pair / divergent root"/>
+
+    <sequenceFlow id="I1" sourceRef="Start_IndexerScan" targetRef="Task_QueryBlocksA"/>
+    <sequenceFlow id="I2" sourceRef="Task_QueryBlocksA" targetRef="Task_ValidatePairA"/>
+    <sequenceFlow id="I3" sourceRef="Task_ValidatePairA" targetRef="Gateway_ValidPairA"/>
+    <sequenceFlow id="I4_No" sourceRef="Gateway_ValidPairA" targetRef="End_IndexerRejected" name="No"/>
+    <sequenceFlow id="I4_Yes" sourceRef="Gateway_ValidPairA" targetRef="Task_ComputeLeafA" name="Yes"/>
+    <sequenceFlow id="I5" sourceRef="Task_ComputeLeafA" targetRef="Task_InsertTreeA"/>
+    <sequenceFlow id="I6" sourceRef="Task_InsertTreeA" targetRef="Task_ComputeRootA"/>
+    <sequenceFlow id="I7" sourceRef="Task_ComputeRootA" targetRef="Task_CompareRootsA"/>
+    <sequenceFlow id="I8" sourceRef="Task_CompareRootsA" targetRef="Gateway_RootAgree"/>
+    <sequenceFlow id="I9_No" sourceRef="Gateway_RootAgree" targetRef="End_IndexerRejected" name="No"/>
+    <sequenceFlow id="I9_Yes" sourceRef="Gateway_RootAgree" targetRef="Task_PublishRoot" name="Yes"/>
+    <sequenceFlow id="I10" sourceRef="Task_PublishRoot" targetRef="Task_ServeProof"/>
+    <sequenceFlow id="I11" sourceRef="Task_ServeProof" targetRef="End_IndexerAccepted"/>
+  </process>
+
+  <!-- ============================================================ -->
+  <!-- Guardian Network Process                                     -->
+  <!-- ============================================================ -->
+  <process id="Process_Guardian" isExecutable="false">
+    <laneSet id="LaneSet_Guardian">
+      <lane id="Lane_GuardianShare" name="Each Guardian (FROST share)">
+        <flowNodeRef>Start_PartialSigRequest</flowNodeRef>
+        <flowNodeRef>Task_VerifyZKProof</flowNodeRef>
+        <flowNodeRef>Gateway_ProofValid</flowNodeRef>
+        <flowNodeRef>Task_CheckNullifier</flowNodeRef>
+        <flowNodeRef>Gateway_NullifierFresh</flowNodeRef>
+        <flowNodeRef>Task_ComputePartialSig</flowNodeRef>
+        <flowNodeRef>Task_ReturnPartialSig</flowNodeRef>
+        <flowNodeRef>Task_RejectInvalid</flowNodeRef>
+        <flowNodeRef>End_PartialSigSent</flowNodeRef>
+        <flowNodeRef>End_RequestRejected</flowNodeRef>
+      </lane>
+    </laneSet>
+
+    <startEvent id="Start_PartialSigRequest" name="Withdrawal request received"/>
+    <task id="Task_VerifyZKProof" name="Verify Groth16 proof against accepted root"/>
+    <exclusiveGateway id="Gateway_ProofValid" name="Proof valid?"/>
+    <task id="Task_CheckNullifier" name="Check nullifier not already spent"/>
+    <exclusiveGateway id="Gateway_NullifierFresh" name="Nullifier fresh?"/>
+    <task id="Task_ComputePartialSig" name="Compute FROST partial signature"/>
+    <task id="Task_ReturnPartialSig" name="Return partial signature to coordinator"/>
+    <task id="Task_RejectInvalid" name="Return rejection"/>
+    <endEvent id="End_PartialSigSent" name="Partial signature contributed"/>
+    <endEvent id="End_RequestRejected" name="Request rejected"/>
+
+    <sequenceFlow id="G1" sourceRef="Start_PartialSigRequest" targetRef="Task_VerifyZKProof"/>
+    <sequenceFlow id="G2" sourceRef="Task_VerifyZKProof" targetRef="Gateway_ProofValid"/>
+    <sequenceFlow id="G3_No" sourceRef="Gateway_ProofValid" targetRef="Task_RejectInvalid" name="No"/>
+    <sequenceFlow id="G3_Yes" sourceRef="Gateway_ProofValid" targetRef="Task_CheckNullifier" name="Yes"/>
+    <sequenceFlow id="G4" sourceRef="Task_CheckNullifier" targetRef="Gateway_NullifierFresh"/>
+    <sequenceFlow id="G5_No" sourceRef="Gateway_NullifierFresh" targetRef="Task_RejectInvalid" name="No"/>
+    <sequenceFlow id="G5_Yes" sourceRef="Gateway_NullifierFresh" targetRef="Task_ComputePartialSig" name="Yes"/>
+    <sequenceFlow id="G6" sourceRef="Task_ComputePartialSig" targetRef="Task_ReturnPartialSig"/>
+    <sequenceFlow id="G7" sourceRef="Task_ReturnPartialSig" targetRef="End_PartialSigSent"/>
+    <sequenceFlow id="G8" sourceRef="Task_RejectInvalid" targetRef="End_RequestRejected"/>
+  </process>
+
+  <!-- ============================================================ -->
+  <!-- Withdrawer / Coordinator Process                             -->
+  <!-- ============================================================ -->
+  <process id="Process_Coordinator" isExecutable="false">
+    <startEvent id="Start_Withdraw" name="User wants to withdraw"/>
+    <task id="Task_FetchRoot" name="Fetch accepted Merkle root from indexers"/>
+    <task id="Task_FetchProof" name="Fetch inclusion proof for commitment C"/>
+    <task id="Task_GenerateZKProof" name="Generate Groth16 ZK proof"/>
+    <task id="Task_BuildWithdrawalBlock" name="Build unsigned withdrawal block Pool → P_w"/>
+    <task id="Task_RequestPartialSig" name="Request partial signatures from ≥t guardians"/>
+    <task id="Task_CollectPartialSigs" name="Collect t valid partial signatures"/>
+    <task id="Task_AggregateSignature" name="Aggregate partial signatures into full Ed25519-blake2b signature"/>
+    <task id="Task_AttachSignature" name="Attach signature to withdrawal block"/>
+    <task id="Task_BroadcastWithdrawal" name="Compute PoW and broadcast withdrawal block"/>
+    <endEvent id="End_WithdrawDone" name="Withdrawal broadcast"/>
+
+    <sequenceFlow id="C1" sourceRef="Start_Withdraw" targetRef="Task_FetchRoot"/>
+    <sequenceFlow id="C2" sourceRef="Task_FetchRoot" targetRef="Task_FetchProof"/>
+    <sequenceFlow id="C3" sourceRef="Task_FetchProof" targetRef="Task_GenerateZKProof"/>
+    <sequenceFlow id="C4" sourceRef="Task_GenerateZKProof" targetRef="Task_BuildWithdrawalBlock"/>
+    <sequenceFlow id="C5" sourceRef="Task_BuildWithdrawalBlock" targetRef="Task_RequestPartialSig"/>
+    <sequenceFlow id="C6" sourceRef="Task_RequestPartialSig" targetRef="Task_CollectPartialSigs"/>
+    <sequenceFlow id="C7" sourceRef="Task_CollectPartialSigs" targetRef="Task_AggregateSignature"/>
+    <sequenceFlow id="C8" sourceRef="Task_AggregateSignature" targetRef="Task_AttachSignature"/>
+    <sequenceFlow id="C9" sourceRef="Task_AttachSignature" targetRef="Task_BroadcastWithdrawal"/>
+    <sequenceFlow id="C10" sourceRef="Task_BroadcastWithdrawal" targetRef="End_WithdrawDone"/>
+  </process>
+
+  <!-- ============================================================ -->
+  <!-- Diagram Layout (simplified)                                  -->
+  <!-- ============================================================ -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1" name="VELA v2 Threshold Architecture">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Collaboration_1">
+
+      <bpmndi:BPMNShape id="Participant_Depositor_di" bpmnElement="Participant_Depositor" isHorizontal="true">
+        <omgdc:Bounds x="100" y="80" width="1500" height="180"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="Participant_Ledger_di" bpmnElement="Participant_Ledger" isHorizontal="true">
+        <omgdc:Bounds x="100" y="300" width="1500" height="180"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="Participant_Indexer_di" bpmnElement="Participant_Indexer" isHorizontal="true">
+        <omgdc:Bounds x="100" y="520" width="1500" height="220"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="Participant_Guardian_di" bpmnElement="Participant_Guardian" isHorizontal="true">
+        <omgdc:Bounds x="100" y="780" width="1500" height="220"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="Participant_Coordinator_di" bpmnElement="Participant_Coordinator" isHorizontal="true">
+        <omgdc:Bounds x="100" y="1040" width="1500" height="220"/>
+      </bpmndi:BPMNShape>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>

@@ -1,24 +1,26 @@
-# VELA v2 — Groth16-Integrated Prototype
+# VELA v2
 
-This repository contains a working implementation of the VELA v2 layer-2 privacy protocol for Nano (XNO), including the revised specification, the Circom Groth16 circuit, and Python services that generate and verify real ZK proofs for withdrawals.
+A decentralized privacy layer for Nano (XNO). Users deposit into a common pool and withdraw to fresh addresses using Groth16 zero-knowledge proofs. The pool key is controlled by a threshold guardian network, so no single machine ever holds the funds.
 
-**⚠️ WARNING:** This is an unaudited prototype. It uses a single guardian and does not use FROST threshold signing. Do not use it with mainnet funds without further audit and hardening.
+> For the full protocol design, see [`DESIGN.md`](DESIGN.md).
 
 ## Repository Layout
 
 ```
-VELA_revised_v2.md         # Corrected protocol specification
+DESIGN.md                  # Protocol specification and architecture
 src/
   vela_crypto.py           # Nano crypto + Poseidon commitments/nullifiers
   poseidon_bridge.py       # Python → Node Poseidon/circomlibjs bridge
   snarkjs_bridge.py        # Python → snarkjs Groth16 prove/verify bridge
   vela_indexer.py          # Tracks deposits/commitments, Poseidon Merkle trees
-  vela_guardian.py         # Verifies Groth16 proofs, signs withdrawals
+  vela_guardian.py         # Guardian service (threshold signing in implementation phase)
   vela_client.py           # CLI for deposits and withdrawals
 circuit/
   vela.circom              # Circom withdrawal circuit
   build/                   # Compiled circuit artifacts (r1cs, wasm, zkey, vk)
   poseidon_js/             # Node.js snarkjs helper
+docs/
+  VELA_v2_architecture.bpmn # Full BPMN 2.0 model of the protocol
 scripts/
   poseidon_helper.mjs      # Node Poseidon/Merkle helper
   deploy.sh                # Deploy to Hostinger VPS
@@ -32,7 +34,7 @@ config/
 
 ## Deployed Services
 
-The prototype is deployed on a Hostinger VPS (187.127.123.229):
+A single-guardian deployment is running on a Hostinger VPS for testing and integration:
 
 - **Indexer:** `http://127.0.0.1:8080` (VPS localhost) / Tor: `ejg5mnh3lvhmgwyrxrbzuqgd3k3siplndsxhzht23vxitjxppf2yukid.onion`
 - **Guardian:** `http://127.0.0.1:8081` (VPS localhost) / Tor: `jnigdgannexjxemablsyxwf6uass3ufcq4xu6eftmrwadym3z3dleyad.onion`
@@ -86,7 +88,7 @@ The indexer verifies the deposit→pool transfer, computes the Poseidon commitme
 
 ### 6. Request withdrawal
 
-The client fetches the Merkle proof from the indexer, generates a Groth16 proof locally with snarkjs, and sends it to the guardian:
+The client fetches the Merkle proof from the indexer, generates a Groth16 proof locally with snarkjs, and sends it to the guardian network:
 
 ```bash
 python3 -m src.vela_client withdraw \
@@ -107,12 +109,9 @@ python tests/test_e2e.py
 python tests/test_zk.py
 ```
 
-## Production Gaps
+## Production Status
 
-- **FROST threshold signing:** the prototype uses a single pool signing key.
-- **Tor-only client traffic:** services are exposed as hidden services, but clients should also route all traffic over Tor.
-- **Fee sweep automation:** fees accumulate in the pool but are not auto-swept.
-- **Real Nano node:** public RPC endpoints are used; live operation requires a synced node or beta-network funds for testing.
+The current deployed instance uses a single guardian for integration testing. The production design in [`DESIGN.md`](DESIGN.md) uses a `t-of-n` FROST threshold guardian network.
 
 ## License
 

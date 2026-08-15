@@ -1,11 +1,11 @@
 """
 VELA v2 Guardian.
 
-Single-key guardian that holds the pool signing key, verifies Groth16 ZK
-withdrawal proofs, and signs/broadcasts Nano withdrawal transactions.
+Single-key guardian implementation that holds the pool signing key, verifies
+Groth16 ZK withdrawal proofs, and signs/broadcasts Nano withdrawal transactions.
 
-Production must replace the single key with FROST threshold signing and a
-distributed guardian set.
+The production design uses a t-of-n FROST threshold signer set so that no
+single machine controls the pool key. See DESIGN.md for the full architecture.
 """
 import json
 import os
