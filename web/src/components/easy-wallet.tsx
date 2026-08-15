@@ -400,7 +400,11 @@ export default function EasyWallet() {
 
         <div className="mt-6">
           <p className="text-sm text-zinc-300">
-            Send exactly <strong>{depositAmountNano} XNO</strong> to your source address:
+            Send <strong>at least {depositAmountNano} XNO</strong> to your source address.
+          </p>
+          <p className="mt-1 text-xs text-zinc-400">
+            {rawToNano(denomRaw)} XNO goes into the pool and 1 raw is used for the commitment
+            block. Anything extra stays in your source address.
           </p>
           <div className="mt-3 flex flex-col items-center gap-3 rounded-lg bg-white p-4">
             {depositUri && <QRCodeSVG value={depositUri} size={180} />}
