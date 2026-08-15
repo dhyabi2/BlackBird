@@ -14,8 +14,9 @@ A decentralized privacy layer for Nano (XNO). Users deposit into a common pool a
 8. [Withdrawal Flow](#8-withdrawal-flow)
 9. [Censorship Resistance](#9-censorship-resistance)
 10. [Economic Security](#10-economic-security)
-11. [Deployment and Operations](#11-deployment-and-operations)
-12. [BPMN Model](#12-bpmn-model)
+11. [Client Performance](#11-client-performance)
+12. [Deployment and Operations](#12-deployment-and-operations)
+13. [BPMN Model](#13-bpmn-model)
 
 ---
 
@@ -282,7 +283,35 @@ These social measures are weaker than contract-enforced slashing and are not rel
 
 ---
 
-## 11. Deployment and Operations
+## 11. Client Performance
+
+Withdrawing requires a Groth16 proof over a depth-20 Poseidon Merkle tree. In the prototype this is done by calling `snarkjs` through a Node.js bridge because Python 3.14 cannot install a native Poseidon library. The bridge adds process startup and serialization overhead, so the client experience is slower than necessary.
+
+### Performance roadmap
+
+The target is sub-second proof generation on a commodity laptop and a path to browser/wallet proving.
+
+| Phase | Mechanism | Goal |
+|-------|-----------|------|
+| 1 | **Native Rust/PyO3 prover** | Replace the Node bridge with a compiled Python extension that generates the witness and Groth16 proof in Rust via `arkworks`. This removes the Node dependency and the subprocess overhead. |
+| 2 | **Pippenger MSM + fixed-base precomputation** | Replace generic multi-scalar multiplication with Pippenger's algorithm and precomputed window tables for zkey base points, cutting proving time further. |
+| 3 | **Circuit constraint minimization** | Reduce R1CS constraints by optimizing Poseidon parameters and Merkle-path hashing. Requires a new trusted-setup artifact and a security review. |
+| 4 | **WASM SIMD/threaded prover** | Compile the Rust prover to `wasm32` with SIMD and optional threading for browser and light-wallet clients. |
+
+### What stays the same
+
+- The circuit semantics, public inputs, and verification key remain unchanged in phases 1 and 2.
+- Phase 3 changes the circuit and trusted setup, so it is only done after an audit.
+- Phase 4 reuses the same Rust core and does not affect the protocol.
+
+### Non-goals
+
+- GPU proving is not required for the CLI.
+- Caching final proofs is unsafe because each withdrawal uses a unique nullifier; only setup-dependent subresults may be cached.
+
+---
+
+## 12. Deployment and Operations
 
 ### Guardian setup
 
@@ -306,7 +335,7 @@ These social measures are weaker than contract-enforced slashing and are not rel
 
 ---
 
-## 12. BPMN Model
+## 13. BPMN Model
 
 A detailed BPMN 2.0 model of the full protocol is available at:
 
