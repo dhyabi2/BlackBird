@@ -19,8 +19,9 @@ from typing import Dict, List, Optional, Tuple
 import requests
 from flask import Flask, request, jsonify
 
-from .vela_crypto import pool_pubkey, nano_pubkey_from_address
-from .poseidon_bridge import poseidon_tree
+from .vela_crypto import pool_pubkey, nano_pubkey_from_address, compute_commitment, compute_nullifier
+from .poseidon_bridge import poseidon_tree, split32
+from .snarkjs_bridge import generate_proof
 from .nano_rpc import NanoRPC
 
 GUARDIAN_URL = os.environ.get("VELA_GUARDIAN_URL", "http://127.0.0.1:8081")
@@ -247,7 +248,63 @@ def create_app(indexer: VelaIndexer) -> Flask:
     @app.route("/api/prove", methods=["POST"])
     @require_api_key
     def api_prove():
-        return jsonify({"error": "Remote proving is not implemented yet. Generate proofs locally."}), 501
+        data = request.json or {}
+        try:
+            n = bytes.fromhex(data["n"])
+            t = bytes.fromhex(data["t"])
+            P_w = bytes.fromhex(data["P_w"])
+            denomination = int(data["denomination"])
+            epoch = int(data["epoch"])
+            if len(n) != 32 or len(t) != 32 or len(P_w) != 32:
+                return jsonify({"error": "n, t, P_w must be 32 bytes"}), 400
+
+            S_pub = pool_pubkey(denomination)
+            C = compute_commitment(n, t, P_w, S_pub)
+            proof_info = indexer.get_proof(epoch, denomination, C)
+            if proof_info is None:
+                return jsonify({"error": "commitment not in tree"}), 404
+
+            path = [int(x) for x in proof_info["path"]]
+            indices = [int(x) for x in proof_info["indices"]]
+            if len(path) != MERKLE_DEPTH or len(indices) != MERKLE_DEPTH:
+                return jsonify({"error": "invalid proof depth"}), 500
+
+            n_lo, n_hi = split32(n)
+            t_lo, t_hi = split32(t)
+            P_w_lo, P_w_hi = split32(P_w)
+            S_pub_lo, S_pub_hi = split32(S_pub)
+            root = indexer.get_root(epoch, denomination)
+            if root is None:
+                return jsonify({"error": "no tree for epoch/denomination"}), 404
+            N = int(data["nullifier"], 16) if data.get("nullifier") else compute_nullifier(n)
+
+            input_signals = {
+                "root": root,
+                "nullifier": N,
+                "P_w_lo": P_w_lo,
+                "P_w_hi": P_w_hi,
+                "n_lo": n_lo,
+                "n_hi": n_hi,
+                "t_lo": t_lo,
+                "t_hi": t_hi,
+                "S_pub_lo": S_pub_lo,
+                "S_pub_hi": S_pub_hi,
+                "leafIndex": indices,
+                "path": path,
+            }
+            result = generate_proof(input_signals)
+            return jsonify(result)
+        except Exception as e:
+            print("prove error:", e)
+            return jsonify({"error": str(e)}), 400
+
+    @app.route("/api/pool_address/<int:denomination>")
+    def api_pool_address(denomination):
+        pub = pool_pubkey(denomination)
+        return jsonify({
+            "denomination": str(denomination),
+            "pool_pubkey": pub.hex(),
+        })
 
     @app.route("/root/<int:epoch>/<int:denomination>")
     def root(epoch, denomination):

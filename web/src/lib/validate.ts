@@ -23,7 +23,13 @@ export const withdrawRequestSchema = z.object({
 });
 
 export const proveRequestSchema = z.object({
-  inputs: z.record(z.string(), z.any()),
+  n: hexHashSchema,
+  t: hexHashSchema,
+  P_w: hexHashSchema,
+  nullifier: z.string().min(1, "nullifier is required"),
+  denomination: z.number().int().positive(),
+  epoch: z.number().int().nonnegative(),
+  leaf_index: z.number().int().nonnegative().optional(),
 });
 
 export const balanceQuerySchema = z.object({

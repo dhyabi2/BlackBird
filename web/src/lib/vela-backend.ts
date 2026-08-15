@@ -42,6 +42,13 @@ export async function getPoolStatus() {
   }>("/api/status");
 }
 
+export async function getPoolAddress(denomination: number | string) {
+  return velaFetch<{
+    denomination?: string;
+    pool_pubkey?: string;
+  }>(`/api/pool_address/${denomination}`);
+}
+
 export async function submitDeposit(body: {
   deposit_hash: string;
   commit_hash: string;
@@ -66,12 +73,20 @@ export async function submitWithdrawal(body: {
   });
 }
 
-export async function requestProof(inputs: Record<string, unknown>) {
+export async function requestProof(body: {
+  n: string;
+  t: string;
+  P_w: string;
+  nullifier: string;
+  denomination: number;
+  epoch: number;
+  leaf_index?: number;
+}) {
   return velaFetch<{
     proof?: unknown;
     publicSignals?: string[];
   }>("/api/prove", {
     method: "POST",
-    body: JSON.stringify({ inputs }),
+    body: JSON.stringify(body),
   });
 }
