@@ -53,7 +53,23 @@ npm install
 
 The circuit must be compiled and trusted-setup artifacts generated before real proofs can be produced (see `circuit/build/`).
 
-### 2. Generate a VelaID
+### 2. Configure Nano RPC
+
+VELA uses [rpc.nano.to](https://rpc.nano.to) as the default Nano RPC endpoint. Set your API key as an environment variable:
+
+```bash
+export NANO_RPC_API_KEY=RPC-KEY-F2EAA7F8530B453393FC850BDB5342BE20BBA98474CD4DF7A83AB13EBD24C934
+```
+
+Or create a `.env` file in the project root (it is gitignored):
+
+```bash
+echo 'NANO_RPC_API_KEY=RPC-KEY-F2EAA7F8530B453393FC850BDB5342BE20BBA98474CD4DF7A83AB13EBD24C934' >> .env
+```
+
+The key is sent as an `Authorization: Bearer ...` header. Calls work without a key on the free tier, but a key unlocks higher rate limits.
+
+### 3. Generate a VelaID
 
 ```bash
 source venv/bin/activate
@@ -62,11 +78,11 @@ python3 -m src.vela_client generate
 
 Save the output (`seed_view`, `A`, `B`).
 
-### 3. Fund a source account
+### 4. Fund a source account
 
 Create or use an existing Nano account and send it at least `denomination + 1` raw (e.g., 1.000000001 XNO for the 1 XNO pool).
 
-### 4. Prepare a deposit
+### 5. Prepare a deposit
 
 ```bash
 python3 -m src.vela_client deposit <source_seed_hex> <seed_view_hex> 1
@@ -74,7 +90,7 @@ python3 -m src.vela_client deposit <source_seed_hex> <seed_view_hex> 1
 
 This prints unsigned deposit and commitment blocks with PoW. Broadcast them to the Nano network (e.g., via a local Nano node or public RPC that accepts `process`). The commitment is a BN254 field element encoded as a 32-byte `link` field.
 
-### 5. Submit to indexer
+### 6. Submit to indexer
 
 After both blocks are confirmed, tell the indexer about the pair:
 
@@ -86,7 +102,7 @@ curl -X POST http://<vps-ip-or-onion>:8080/submit \
 
 The indexer verifies the deposit→pool transfer, computes the Poseidon commitment from the commitment block's `link`, and inserts it into the epoch/denomination Merkle tree.
 
-### 6. Request withdrawal
+### 7. Request withdrawal
 
 The client fetches the Merkle proof from the indexer, generates a Groth16 proof locally with snarkjs, and sends it to the guardian network:
 

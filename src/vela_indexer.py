@@ -19,34 +19,11 @@ from flask import Flask, request, jsonify
 
 from .vela_crypto import pool_pubkey
 from .poseidon_bridge import poseidon_tree
+from .nano_rpc import NanoRPC
 
 EPOCH_SECONDS = 86400
 DENOMINATIONS = {10**29, 10**30, 10**31, 10**32}
 MERKLE_DEPTH = 20
-
-NANO_RPC_ENDPOINTS = [
-    "https://app.nanolooker.com/api/rpc",
-    "https://proxy.nanos.cc/proxy",
-]
-
-
-class NanoRPC:
-    def __init__(self, endpoints: List[str] = NANO_RPC_ENDPOINTS):
-        self.endpoints = endpoints
-        self.session = requests.Session()
-
-    def call(self, action: str, params: dict) -> dict:
-        last_err = None
-        for endpoint in self.endpoints:
-            try:
-                payload = {"action": action, **params}
-                resp = self.session.post(endpoint, json=payload, timeout=15)
-                resp.raise_for_status()
-                return resp.json()
-            except Exception as e:
-                last_err = e
-                continue
-        raise RuntimeError(f"All Nano RPC endpoints failed: {last_err}")
 
 
 class PoseidonMerkleTree:
