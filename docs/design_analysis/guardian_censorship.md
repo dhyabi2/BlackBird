@@ -26,7 +26,7 @@ The refinement model over-rejected transparency-based mechanisms as "no enforcem
 | 1 | t-of-n threshold with direct client access | Any `t` honest guardians can sign; clients contact guardians directly. | Single-guardian or minority censorship. | Already in VELA v2; ensure large enough `n`. | If `>= n-t+1` collude, censorship succeeds. | 95 |
 | 2 | Large, diverse guardian set | Increase `n` and choose operators across jurisdictions/networks. | Censorship by a small coalition. | Governance/provisioning. | Higher coordination cost. | 85 |
 | 3 | Public accountability log | Guardians publish partial-signature responses (or non-response proofs) to a public log. | Hidden blacklisting / delays. | Logging endpoint + client audit tooling. | Does not force signing; privacy trade-off. | 80 |
-| 4 | External-chain slashing for non-responsiveness | Fraud proofs on the bond contract penalize guardians that ignore valid requests. | Long-term censorship. | Slashing contract + monitoring service. | Reactive; requires external chain. | 75 |
+| 4 | Pure-Nano multi-sig bond slashing | Bond held in Nano multi-sig controlled by arbiters; fraud proof triggers arbiter-signed slash transaction. | Long-term censorship. | Multi-sig bond account + arbiter process. | Requires honest arbiters; not automatic. | 70 |
 | 5 | Guardian rotation / removal | Underperforming guardians are voted out and replaced via re-sharing. | Persistent malicious minority. | Re-sharing protocol + governance. | Off-chain coordination; slow. | 70 |
 | 6 | Multi-pool redundancy | Multiple independent VELA pools; users can deposit into any pool. | Censorship by one pool's guardians. | Deploy multiple pools. | Fragmented liquidity. | 65 |
 | 7 | Watchtower service | Third-party monitors guardian response times and publishes alerts/proofs. | Undetected censorship. | Watchtower operator. | Trusted watchtower; false positives. | 60 |
@@ -35,8 +35,12 @@ The refinement model over-rejected transparency-based mechanisms as "no enforcem
 
 ## Composite fix (selected)
 
-**Combination:** t-of-n threshold + large diverse set + public accountability log + external-chain slashing + guardian rotation.
+**Combination:** t-of-n threshold + large diverse set + public accountability log + pure-Nano multi-sig bond + share revocation via re-sharing + guardian rotation.
 
-**Description:** Make censorship require `>= n-t+1` colluding guardians by using a large, geographically/jurisdictionally diverse set. Give clients direct access so no coordinator can block them. Add public accountability logs to expose misbehavior, external-chain slashing to impose economic cost, and rotation to remove persistently unresponsive guardians.
+**Description:** Make censorship require `>= n-t+1` colluding guardians by using a large, geographically/jurisdictionally diverse set. Give clients direct access so no coordinator can block them. Add public accountability logs to expose misbehavior. Use a Nano multi-sig bond (arbiter-controlled) to impose economic cost, and use FROST re-sharing to cryptographically revoke a misbehaving guardian's share. Rotate persistently unresponsive guardians.
 
-**Score:** 94/100
+**Score:** 93/100
+
+## No external smart contracts
+
+All enforcement stays on Nano: multi-sig bond movement by arbiters, share revocation by re-sharing, and social exclusion by clients.
