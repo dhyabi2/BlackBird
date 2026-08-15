@@ -27,32 +27,9 @@ from .vela_crypto import (
 )
 from .poseidon_bridge import split32, field_to_bytes32
 from .snarkjs_bridge import generate_proof
-
-NANO_RPC_ENDPOINTS = [
-    "https://app.nanolooker.com/api/rpc",
-    "https://proxy.nanos.cc/proxy",
-]
+from .nano_rpc import NanoRPC
 
 POW_THRESHOLD = 0xFFFFFFF800000000
-
-
-class NanoRPC:
-    def __init__(self, endpoints: List[str] = NANO_RPC_ENDPOINTS):
-        self.endpoints = endpoints
-        self.session = requests.Session()
-
-    def call(self, action: str, params: dict) -> dict:
-        last_err = None
-        for endpoint in self.endpoints:
-            try:
-                payload = {"action": action, **params}
-                resp = self.session.post(endpoint, json=payload, timeout=15)
-                resp.raise_for_status()
-                return resp.json()
-            except Exception as e:
-                last_err = e
-                continue
-        raise RuntimeError(f"All Nano RPC endpoints failed: {last_err}")
 
 
 def compute_pow(block_hash: bytes, threshold: int = POW_THRESHOLD) -> str:

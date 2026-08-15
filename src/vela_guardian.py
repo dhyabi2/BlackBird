@@ -24,32 +24,10 @@ from .vela_crypto import (
 )
 from .poseidon_bridge import split32, field_to_bytes32
 from .snarkjs_bridge import verify_proof
+from .nano_rpc import NanoRPC
 
 EPOCH_SECONDS = 86400
 WITHDRAW_FEE_RAW = int(0.01 * 10**30)
-NANO_RPC_ENDPOINTS = [
-    "https://app.nanolooker.com/api/rpc",
-    "https://proxy.nanos.cc/proxy",
-]
-
-
-class NanoRPC:
-    def __init__(self, endpoints: List[str] = NANO_RPC_ENDPOINTS):
-        self.endpoints = endpoints
-        self.session = requests.Session()
-
-    def call(self, action: str, params: dict) -> dict:
-        last_err = None
-        for endpoint in self.endpoints:
-            try:
-                payload = {"action": action, **params}
-                resp = self.session.post(endpoint, json=payload, timeout=15)
-                resp.raise_for_status()
-                return resp.json()
-            except Exception as e:
-                last_err = e
-                continue
-        raise RuntimeError(f"All Nano RPC endpoints failed: {last_err}")
 
 
 class VelaGuardian:
