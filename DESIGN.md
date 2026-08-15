@@ -216,9 +216,33 @@ This limits the unaudited surface to the hash-function substitutions and the con
 
 ### Key generation and share refresh
 
+#### Prototype: trusted dealer
+
 For the prototype, a **trusted dealer** distributes FROST shares to guardians. The dealer is trusted only at setup; it does not participate in signing and is destroyed after distribution. This lets the protocol use `frost-core`'s verifiable share generation and avoids the complexity of a production DKG before the ciphersuite is fully audited.
 
-Periodic **share refresh** is planned and will reuse the same trusted-dealer or a lightweight proactive-refresh ceremony; the design defers the full DKG ceremony until after the Ed25519-blake2b ciphersuite has been independently reviewed.
+#### Production: asynchronous Feldman VSS DKG
+
+For production, guardians run an **asynchronous Distributed Key Generation (DKG)** protocol. No single party ever knows the full private key.
+
+1. Each guardian generates a random polynomial and computes Feldman commitments to its coefficients.
+2. Commitments are broadcast over a public bulletin board (e.g., Nostr, a git repository, or the Nano ledger as small messages). A hash commitment round prevents anyone from choosing coefficients after seeing others' choices.
+3. Each guardian privately sends a Shamir share to every other guardian and verifies received shares against the public commitments.
+4. The aggregate public key is the sum of all individual public commitments. Each guardian's FROST share is the sum of the valid shares it received.
+
+The protocol tolerates up to `t-1` malicious guardians, provided there is an honest majority for dispute resolution and a reliable broadcast channel.
+
+#### Proactive share refresh
+
+Periodically (e.g., weekly or after any membership change), guardians run a **proactive refresh**:
+
+- Each guardian generates a new random polynomial with a zero constant term.
+- They distribute fresh shares such that the sum of all zero-constant-term secrets is zero.
+- Each guardian adds the new share to its old share, producing a refreshed share.
+- The aggregate public key does not change, but old shares become useless to an attacker.
+
+#### Membership changes
+
+When guardians join or leave, the remaining guardians run a **re-sharing protocol** to generate new shares for the updated set without changing the pool public key. Old shares are explicitly revoked and must not be accepted by clients after the refresh completes.
 
 ### Network communication
 
