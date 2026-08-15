@@ -18,6 +18,7 @@ A decentralized privacy layer for Nano (XNO). Users deposit into a common pool a
 12. [Client Performance](#12-client-performance)
 13. [Deployment and Operations](#13-deployment-and-operations)
 14. [BPMN Model](#14-bpmn-model)
+15. [Critical Design Area Analyses](#15-critical-design-area-analyses)
 
 ---
 
@@ -564,6 +565,18 @@ docs/VELA_v2_architecture.bpmn
 ```
 
 Open it in any BPMN editor (e.g., Camunda Modeler, bpmn.io).
+
+---
+
+## 15. Critical Design Area Analyses
+
+Deep-dive analyses for active protocol-design questions are maintained in `docs/design_analysis/`:
+
+- `docs/design_analysis/pattern_matching_defenses.md` — mitigations against deposit-to-withdrawal pattern matching on Nano's transparent ledger.
+- `docs/design_analysis/small_and_big_amounts.md` — supporting arbitrary withdrawal amounts without external smart contracts, using fixed denominations and change rotation.
+- `docs/design_analysis/scalability_and_deployment.md` — scaling for operators and users, deployment simplification, and client proving options.
+
+Each document includes ranked mechanisms, rejected ideas, and a recommended composite fix. They are updated as the design evolves.
 
 ---
 
