@@ -1,5 +1,6 @@
 "use client";
 
+import "@/lib/polyfills";
 import { useEffect, useMemo, useState } from "react";
 import { deriveLegacyAccount, buildSendBlock } from "@/lib/wallet";
 import { computeCommitment, computeNullifier, hexToBytes, bytesToHex } from "@/lib/vela-crypto";
