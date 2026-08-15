@@ -45,6 +45,21 @@ NEXT_PUBLIC_APP_NAME=VELA v2
 NEXT_PUBLIC_APP_URL=https://vela-web.vercel.app
 ```
 
+## Vercel API routes
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/api/health` | GET | Vercel + Nano RPC health |
+| `/api/status` | GET | Pool status from Hostinger backend |
+| `/api/balance` | GET | Nano account balance via `rpc.nano.to` |
+| `/api/account_info` | GET | Nano account info (frontier, rep, balance) |
+| `/api/pool_address/[denom]` | GET | Pool public key for a denomination |
+| `/api/deposit` | POST | Submit deposit/commit hashes to backend |
+| `/api/withdraw` | POST | Submit ZK proof and request guardian signature |
+| `/api/prove` | POST | Generate a Groth16 proof remotely on the backend |
+| `/api/broadcast` | POST | Publish a signed Nano block via `rpc.nano.to` |
+| `/api/work` | POST | Generate Nano PoW for a block hash |
+
 ## Pre-deployment checks
 
 - [ ] `npm run build` passes locally inside `web/`.
@@ -87,7 +102,9 @@ NEXT_PUBLIC_APP_URL=https://vela-web.vercel.app
 
 - [ ] `GET /api/health` returns `{"ok":true}`.
 - [ ] `GET /api/status` returns pool state from backend.
-- [ ] Deposit and withdraw flows work end-to-end against a testnet/staging backend.
+- [ ] `GET /api/pool_address/1000000000000000000000000000000` returns a public key.
+- [ ] `/wallet` page loads and derives addresses from a test seed.
+- [ ] Deposit and withdraw flows work end-to-end with a funded test account.
 - [ ] Rate limit blocks abuse after threshold.
 
 ## Known limitations on Vercel
