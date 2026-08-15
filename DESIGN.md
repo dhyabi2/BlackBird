@@ -554,6 +554,41 @@ The target is sub-second proof generation on a commodity laptop and a path to br
 2. Endpoints can be discovered via hardcoded bootstrap list, Nostr events, or on-chain announcements.
 3. The client generates proofs locally and can act as its own coordinator.
 
+### Web client on Vercel
+
+A production Next.js web client lives in `web/` and is designed to deploy on Vercel:
+
+- **Vercel hosts** the static/dynamic UI and lightweight serverless API routes.
+- **Hostinger VPS hosts** the heavy backend: indexer, guardian, coordinator/prover.
+- **rpc.nano.to** provides server-side Nano RPC access via `NANO_RPC_KEY`.
+
+Key API routes:
+
+| Route | Purpose |
+|-------|---------|
+| `GET /api/health` | Vercel + Nano RPC health |
+| `GET /api/status` | Pool status from Hostinger backend |
+| `GET /api/balance?account=...` | Nano balance via `rpc.nano.to` |
+| `POST /api/deposit` | Forward deposit receipt to backend |
+| `POST /api/withdraw` | Forward withdrawal proof to backend |
+| `POST /api/prove` | Proxy proof generation to backend |
+
+Configuration is via environment variables (see `web/.env.example`):
+
+- `NANO_RPC_ENDPOINT` / `NANO_RPC_KEY`
+- `VELA_BACKEND_URL` / `VELA_BACKEND_API_KEY`
+- `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` (optional rate limiting)
+- `NEXT_PUBLIC_APP_NAME` / `NEXT_PUBLIC_APP_URL`
+
+Security is enforced through:
+
+- Strict HSTS, CSP, frame-options, referrer-policy headers in `web/next.config.ts`.
+- Zod input validation on all API routes.
+- Optional Upstash Redis rate limiting.
+- Server-side-only access to RPC and backend keys.
+
+See `docs/vercel_production_readiness.md` for the full checklist.
+
 ---
 
 ## 14. BPMN Model
