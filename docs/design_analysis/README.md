@@ -11,7 +11,7 @@ This directory contains the ranked brainstorming outputs for each critical desig
 | FROST custody / Ed25519-blake2b ciphersuite | Done | (embedded in DESIGN.md) | #1 |
 | Indexer consensus / RootCommit | Done | (embedded in DESIGN.md) | #1 |
 | Coordinator trust / censorship / front-running | Done | (embedded in DESIGN.md) | #2 |
-| Economic slashing without Nano smart contracts | Done | (embedded in DESIGN.md) | #3 |
+| Economic security (pure Nano, no external contracts) | Done | (embedded in DESIGN.md) | #3, #12 |
 | Client proof-generation performance | Done | (embedded in DESIGN.md) | #4 |
 | Use rpc.nano.to as default RPC | Done | (code change) | #5 |
 | DKG and share refresh | Done | [`dkg_share_refresh.md`](dkg_share_refresh.md) | #6 |
@@ -39,7 +39,7 @@ This directory contains the ranked brainstorming outputs for each critical desig
 ## Author's notes on selections
 
 - **Fixed denominations** were kept despite the model's objection because they are a standard and effective unlinkability mechanism for pool-based designs.
-- **External-chain slashing** was accepted as the only practical way to enforce real economic penalties on a chain without smart contracts.
+- **Pure-Nano multi-sig bonds** plus **share revocation via re-sharing** replace any external-chain slashing. Economic penalties on Nano require honest arbiters, not smart contracts.
 - **Deterministic FROST nonces** were explicitly rejected as unsafe; random or per-session nonces are required.
 - **Threshold encryption of P_w** was not adopted as a core fix because binding `P_w` into the signed message already prevents coordinator front-running.
 - **Transparency-based mitigations** (public logs, accountability) were kept for censorship areas because, on Nano, transparency creates social/economic pressure when automatic enforcement is impossible.

@@ -286,7 +286,7 @@ A nullifier can only be spent once. The protocol enforces this at several layers
 1. **Guardian check**: before returning a partial signature, each guardian verifies that the nullifier is not already in its local spent set. Guardians also track "in-flight" nullifiers for which they have recently signed and reject duplicate signing attempts within a short window.
 2. **Nano confirmation**: if two valid blocks spending the same nullifier are broadcast, Nano's Open Representative Voting confirms one first. The losing block is not confirmed; its nullifier remains unspent from the ledger's perspective.
 3. **Post-confirmation rejection**: after the first block is confirmed, all honest guardians reject future signing requests for that nullifier.
-4. **Slashing deterrent**: if two conflicting signed withdrawals are ever confirmed, the offending guardian signatures serve as fraud proofs for the external slashing contract (see Economic Security).
+4. **Slashing deterrent**: if two conflicting signed withdrawals are ever confirmed, the offending guardian signatures serve as fraud proofs. A supermajority of honest guardians can vote to revoke the misbehaving guardian's share via a re-sharing protocol and, if a multi-sig bond is used, move the bond to a protocol treasury or burn address (see Economic Security).
 
 This design does not require a mempool or global timestamps. It relies on guardian vigilance and Nano's single-account-chain ordering: only one block per pool account can be confirmed at a given height.
 
@@ -392,12 +392,13 @@ ISPs or governments can block IP addresses, domains, ports, or Tor traffic.
 
 ### External slashing-contract censorship
 
-The external smart-contract chain used for bonds/slashing could censor fraud-proof submissions.
+A bond custodian set or a majority of guardians could refuse to act on a valid fraud proof, allowing a misbehaving guardian to keep its bond.
 
 **Mitigations:**
 
-- Use a widely decentralized L2 with a credible neutrality record.
-- Maintain a social/economic fallback on Nano: clients locally blacklist misbehaving keys and guardians refuse to sign for blacklisted operators.
+- Bond custody uses a Nano multi-sig requiring a high threshold (e.g., 3-of-5 or supermajority) of independent arbiters, not a single party.
+- Fraud proofs are published publicly on Nano and Nostr so they cannot be hidden.
+- If the bond custodians are unresponsive, clients and guardians fall back to social exclusion (blacklists) and share revocation via re-sharing.
 
 ### Summary
 
@@ -440,21 +441,25 @@ No mechanism built on top of the current Nano protocol can hide the recipient or
 
 ## 11. Economic Security
 
-Guardians and indexers are economically bonded. Because Nano has no smart contracts, automatic, non-custodial slashing cannot be enforced on the Nano ledger alone. VELA v2 therefore uses an **external smart-contract chain** (e.g., an EVM L2) as the slashing layer, while keeping all user funds and protocol state on Nano.
+VELA v2 stays entirely on Nano. Because Nano has no smart contracts, automatic, non-custodial slashing cannot be enforced by the protocol directly. Economic security is therefore achieved through a combination of **bonded multi-sig custody**, **public fraud proofs**, **share revocation via re-sharing**, and **social/economic exclusion**.
 
-### Bond and registration
+### Honest limitation
+
+No mechanism on Nano alone can automatically seize funds from a misbehaving party. All penalties require action by a human supermajority (guardians, arbiters, or the community). The design below makes misbehavior detectable, punishable by a supermajority, and costly in reputation.
+
+### Registration
 
 Before participating, a guardian or indexer registers:
 
 - A Nano account used for protocol actions.
-- A bond posted on the external slashing contract.
 - A URL / Tor onion endpoint.
+- (Optional but recommended) A bond held in a Nano multi-sig account controlled by a supermajority of arbiters.
 
-Clients only accept signatures and roots from registered, bonded participants whose bonds exceed a protocol minimum.
+Clients only accept signatures and roots from registered participants. Bonded participants are preferred, but the protocol does not require a bond to function.
 
 ### Fraud proofs
 
-Anyone can submit a fraud proof to the slashing contract. A valid fraud proof consists of public Nano data plus the relevant ZK proof material:
+Anyone can publish a fraud proof. A valid fraud proof consists of public Nano data plus the relevant ZK proof material:
 
 | Misbehavior | Fraud proof |
 |-------------|-------------|
@@ -464,17 +469,37 @@ Anyone can submit a fraud proof to the slashing contract. A valid fraud proof co
 | Indexer publishes incorrect root | The claimed root, the on-chain RootCommit transaction, and a Merkle proof that the root does not match the ledger data. |
 | Indexer censors a deposit | A challenge showing the indexer omitted a deposit block that appears on Nano. |
 
-If the fraud proof is valid, the contract slashes the bond and pays a bounty to the prover.
+Fraud proofs are published to public channels: Nano `RootCommit`-style messages, Nostr, and the protocol's public logs.
 
-### Soft fallback on Nano
+### Bond and slashing (pure Nano)
 
-Until the external slashing contract is live or as a secondary layer:
+If bonds are used, they are held in a Nano multi-sig account requiring a high threshold (e.g., 3-of-5 or 2/3 supermajority) of independent arbiters. When a fraud proof is accepted:
 
-- Withdrawals include a short delay window during which any party can submit a fraud proof to guardians; if fraud is proven, guardians refuse to sign and the withdrawal fails.
+1. The arbiters verify the proof.
+2. If valid, the arbiters sign a Nano transaction to move the bond to a protocol treasury or burn address.
+3. A portion of the recovered bond may be paid to the prover as a bounty.
+
+Because this requires human arbiters to sign, it is not automatic. It is the strongest economic deterrent available on Nano.
+
+### Share revocation
+
+For guardians, the most powerful enforcement is cryptographic. A supermajority of honest guardians can:
+
+1. Accept a public fraud proof.
+2. Run a re-sharing protocol to generate new FROST shares for the remaining set.
+3. Exclude the misbehaving guardian's share, rendering it useless.
+
+This is enforced by the FROST protocol itself and does not require a smart contract.
+
+### Social and economic exclusion
+
+In parallel with the above:
+
 - Clients maintain a local blacklist of keys with proven misbehavior and refuse to use them.
 - Indexers and guardians that lose community trust see fewer assignments, creating informal economic pressure.
+- Public accountability logs expose non-responsive or misbehaving operators.
 
-These social measures are weaker than contract-enforced slashing and are not relied upon for the main security argument.
+These social measures are not automatic, but they make repeated misbehavior unsustainable.
 
 ---
 

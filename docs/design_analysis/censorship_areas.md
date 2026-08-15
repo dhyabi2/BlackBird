@@ -82,15 +82,15 @@ This document lists every protocol component where censorship is possible, eithe
 
 **Current mitigations:** Multiple discovery channels (hardcoded, Nostr, on-chain); `RootCommit` transactions expose indexer identities.
 
-## 8. External slashing-contract censorship
+## 8. Bond-arbiter censorship
 
 **What can be censored:**
-- The EVM L2 used for bonds/slashing can censor fraud-proof submissions.
-- A sequencer can reorder or censor slashing transactions.
+- Multi-sig bond arbiters can refuse to act on valid fraud proofs.
+- A supermajority of guardians can refuse to run a re-sharing protocol to revoke a misbehaving share.
 
-**Actors:** L2 sequencers, validators, bridge operators.
+**Actors:** Bond arbiters, guardian supermajority.
 
-**Current mitigations:** Use a widely decentralized L2; social fallback on Nano.
+**Current mitigations:** Use a high-threshold multi-sig with independent arbiters; publish fraud proofs publicly on Nano/Nostr; fall back to social exclusion and share revocation if arbiters fail. No external smart contracts are used.
 
 ## 9. Trusted-dealer censorship (prototype only)
 
