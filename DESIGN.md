@@ -13,10 +13,11 @@ A decentralized privacy layer for Nano (XNO). Users deposit into a common pool a
 7. [Guardian Network](#7-guardian-network)
 8. [Withdrawal Flow](#8-withdrawal-flow)
 9. [Censorship Resistance](#9-censorship-resistance)
-10. [Economic Security](#10-economic-security)
-11. [Client Performance](#11-client-performance)
-12. [Deployment and Operations](#12-deployment-and-operations)
-13. [BPMN Model](#13-bpmn-model)
+10. [Privacy Model](#10-privacy-model)
+11. [Economic Security](#11-economic-security)
+12. [Client Performance](#12-client-performance)
+13. [Deployment and Operations](#13-deployment-and-operations)
+14. [BPMN Model](#14-bpmn-model)
 
 ---
 
@@ -311,7 +312,40 @@ This race is not harmful to the withdrawing client: the confirmed block must use
 
 ---
 
-## 10. Economic Security
+## 10. Privacy Model
+
+VELA v2 provides **unlinkability**, not transaction invisibility.
+
+### What is hidden
+
+- **Deposit-withdrawal link**: a Groth16 proof shows that a withdrawal is authorized by some valid deposit, but does not reveal which deposit.
+- **Recipient identity**: withdrawals use stealth addresses; the recipient's long-term public key is not visible on-chain.
+- **Exact amount**: deposits and withdrawals are restricted to a small set of fixed denominations, so many transactions share the same amount.
+
+### What is not hidden
+
+Nano's ledger is fully transparent. The withdrawal transaction itself reveals:
+
+- The one-time recipient address `P_w`.
+- The amount being withdrawn.
+- The timestamp of confirmation.
+
+An observer can see that a withdrawal happened, but cannot determine which deposit funded it.
+
+### Privacy-enhancing practices
+
+- **Fixed denominations**: the protocol enforces a set of allowed amounts (e.g., 0.1, 1, 10 XNO). This prevents trivial amount-based linking.
+- **Stealth addresses**: the client derives a fresh `P_w` for every withdrawal; the recipient scans the chain for outputs to their stealth keys.
+- **Timing jitter** (optional): clients may randomize the delay between deposit and withdrawal to weaken temporal correlation.
+- **Decoy transactions** (optional): clients may broadcast small unrelated payments near the time of withdrawal to add noise. This costs extra fees and is not relied upon for the core security argument.
+
+### Limitation
+
+No mechanism built on top of the current Nano protocol can hide the recipient or amount of a single transaction. Users who need stronger privacy should accept this limitation or wait for future Nano protocol upgrades.
+
+---
+
+## 11. Economic Security
 
 Guardians and indexers are economically bonded. Because Nano has no smart contracts, automatic, non-custodial slashing cannot be enforced on the Nano ledger alone. VELA v2 therefore uses an **external smart-contract chain** (e.g., an EVM L2) as the slashing layer, while keeping all user funds and protocol state on Nano.
 
@@ -351,7 +385,7 @@ These social measures are weaker than contract-enforced slashing and are not rel
 
 ---
 
-## 11. Client Performance
+## 12. Client Performance
 
 Withdrawing requires a Groth16 proof over a depth-20 Poseidon Merkle tree. In the prototype this is done by calling `snarkjs` through a Node.js bridge because Python 3.14 cannot install a native Poseidon library. The bridge adds process startup and serialization overhead, so the client experience is slower than necessary.
 
@@ -379,7 +413,7 @@ The target is sub-second proof generation on a commodity laptop and a path to br
 
 ---
 
-## 12. Deployment and Operations
+## 13. Deployment and Operations
 
 ### Guardian setup
 
@@ -403,7 +437,7 @@ The target is sub-second proof generation on a commodity laptop and a path to br
 
 ---
 
-## 13. BPMN Model
+## 14. BPMN Model
 
 A detailed BPMN 2.0 model of the full protocol is available at:
 
