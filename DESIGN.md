@@ -314,12 +314,94 @@ This design does not require a mempool or global timestamps. It relies on guardi
 
 ## 9. Censorship Resistance
 
-- **Deposits** need only Nano liveness; no indexer or guardian can block them.
-- **Roots** are deterministic; a client can compute its own root from public Nano data if all indexers fail.
-- **Withdrawals** cannot be blocked by a single guardian because any `t-of-n` subset can sign.
-- **Coordinator** is optional and untrusted. The client can aggregate signatures and broadcast itself; any third-party coordinator is only a relay. A coordinator cannot alter `P_w` because partial signatures are bound to the exact Nano block hash.
-- **Front-running** is prevented by binding `P_w` into the Groth16 public signals, the withdrawal intent hash, and the FROST-signed block hash.
-- **Transport** over Tor hidden services hides operator locations and resists IP-level blocking.
+VELA v2 is designed so that no single actor can permanently censor deposits or withdrawals. This section lists every censorship vector and the concrete mitigation applied to each.
+
+### Deposits
+
+Deposits are ordinary Nano transactions to the pool address. They need only Nano liveness; no indexer, guardian, or coordinator can block them.
+
+### Indexer censorship
+
+A malicious indexer can:
+
+- refuse to accept a `deposit_hash`/`commit_hash` pair;
+- publish a wrong or incomplete root;
+- refuse to serve inclusion proofs.
+
+**Mitigations:**
+
+- Multiple independent indexers exist; clients query several and accept a root only when a majority (or at least two independent indexers) agree.
+- Roots are deterministic: any honest party can recompute the root from public Nano ledger data.
+- Indexers publish `RootCommit` transactions on Nano, making censorship visible and giving clients an immutable source of roots.
+- Inclusion proofs can be mirrored to IPFS or other content-addressed storage for availability if indexers go offline.
+
+### Guardian censorship
+
+A guardian can refuse to sign a valid withdrawal. A minority of guardians (`< n-t+1`) cannot block a withdrawal.
+
+**Mitigations:**
+
+- `t-of-n` FROST threshold: any `t` honest guardians can produce a valid signature.
+- Clients contact guardians directly; no coordinator can block all paths.
+- A large, geographically and jurisdictionally diverse guardian set makes collusion harder.
+- Persistent non-signers can be identified via public accountability logs and removed through the re-sharing/rotation protocol.
+- External-chain bonds can be slashed if a guardian is proven to ignore valid requests.
+
+### Coordinator / relay censorship
+
+Coordinators and relays are optional. A single coordinator can refuse to forward or broadcast.
+
+**Mitigations:**
+
+- The default mode is **client-as-aggregator**: the client collects partial signatures and broadcasts the final block itself.
+- Multiple independent coordinators can operate in parallel; the client uses any that respond.
+- Guardians can gossip partial signatures among themselves, so no single coordinator is required for aggregation.
+- Partial signatures are bound to the exact Nano block hash, so a relay cannot alter `P_w`.
+
+### Nano RPC / provider censorship
+
+An RPC provider can refuse reads, reject `process` calls, rate-limit, or serve stale data.
+
+**Mitigations:**
+
+- The client uses multiple independent public RPC endpoints with automatic fallback.
+- It tracks the last known-good endpoint and retries across endpoints.
+- Reads can be cross-checked against multiple providers (quorum consensus).
+- Block signatures and previous-hash links are verified locally.
+- Clients can compute PoW locally if remote `work_generate` is censored.
+
+### Bootstrap / endpoint discovery censorship
+
+Hardcoded lists can be blocked, Nostr relays can be censored, and on-chain announcements can be spammed.
+
+**Mitigations:**
+
+- Signed endpoint manifests are distributed through multiple channels: hardcoded bootstrap, Nostr relays, IPFS, libp2p DHT, and Nano `RootCommit` anchors.
+- Clients require intersection across independent sources and verify signatures before trusting an endpoint.
+- Tor/I2P hidden-service addresses are included in manifests for when clearnet is blocked.
+
+### Network / transport censorship
+
+ISPs or governments can block IP addresses, domains, ports, or Tor traffic.
+
+**Mitigations:**
+
+- Guardian and indexer endpoints are exposed over HTTPS, Tor hidden services, and optionally WebSocket.
+- Clients attempt multiple transports in parallel and use the first working path.
+- Operator locations are hidden by Tor; domain seizure does not affect `.onion` addresses.
+
+### External slashing-contract censorship
+
+The external smart-contract chain used for bonds/slashing could censor fraud-proof submissions.
+
+**Mitigations:**
+
+- Use a widely decentralized L2 with a credible neutrality record.
+- Maintain a social/economic fallback on Nano: clients locally blacklist misbehaving keys and guardians refuse to sign for blacklisted operators.
+
+### Summary
+
+No single failure point can permanently censor VELA v2. Deposits need only Nano liveness; withdrawals need only `t` honest guardians and any working RPC path; discovery uses multiple independent channels; transport falls back through Tor and alternate protocols.
 
 ---
 
