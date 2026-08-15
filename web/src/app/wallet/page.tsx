@@ -79,7 +79,10 @@ export default function WalletPage() {
   }
 
   async function fetchWork(hash: string): Promise<string> {
-    const data = await apiPost("/api/work", { hash });
+    const data = await apiPost("/api/work", {
+      hash,
+      difficulty: "fffffff800000000",
+    });
     if (!data.work) throw new Error("work_generate failed");
     return data.work;
   }
