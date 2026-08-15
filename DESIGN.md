@@ -244,17 +244,41 @@ This race is not harmful to the withdrawing client: the confirmed block must use
 
 ## 10. Economic Security
 
-Guardians and indexers are bonded. Misbehavior is slashed:
+Guardians and indexers are economically bonded. Because Nano has no smart contracts, automatic, non-custodial slashing cannot be enforced on the Nano ledger alone. VELA v2 therefore uses an **external smart-contract chain** (e.g., an EVM L2) as the slashing layer, while keeping all user funds and protocol state on Nano.
 
-| Misbehavior | Slashing action |
-|-------------|-----------------|
-| Guardian signs an invalid or unauthorized withdrawal | Full bond slashed; share revoked. |
-| Guardian signs a double-spend | Full bond slashed. |
-| Guardian offline beyond timeout | Partial bond slashed; replaced. |
-| Indexer publishes incorrect root | Bond slashed; root rejected. |
-| Indexer censors a deposit | Bond slashed if challenged. |
+### Bond and registration
 
-Slashing logic can be enforced on a smart-contract chain or via social/economic exclusion until native Nano programmability becomes available.
+Before participating, a guardian or indexer registers:
+
+- A Nano account used for protocol actions.
+- A bond posted on the external slashing contract.
+- A URL / Tor onion endpoint.
+
+Clients only accept signatures and roots from registered, bonded participants whose bonds exceed a protocol minimum.
+
+### Fraud proofs
+
+Anyone can submit a fraud proof to the slashing contract. A valid fraud proof consists of public Nano data plus the relevant ZK proof material:
+
+| Misbehavior | Fraud proof |
+|-------------|-------------|
+| Guardian signs an invalid or unauthorized withdrawal | The invalid Nano block, the guardian's partial signature or FROST identification, and a proof that the ZK verification or nullifier check failed. |
+| Guardian signs a double-spend | Two distinct Nano blocks spending the same nullifier, both with valid signatures from the guardian. |
+| Guardian offline beyond timeout | A challenge-response record showing the guardian failed to answer a liveness query. |
+| Indexer publishes incorrect root | The claimed root, the on-chain RootCommit transaction, and a Merkle proof that the root does not match the ledger data. |
+| Indexer censors a deposit | A challenge showing the indexer omitted a deposit block that appears on Nano. |
+
+If the fraud proof is valid, the contract slashes the bond and pays a bounty to the prover.
+
+### Soft fallback on Nano
+
+Until the external slashing contract is live or as a secondary layer:
+
+- Withdrawals include a short delay window during which any party can submit a fraud proof to guardians; if fraud is proven, guardians refuse to sign and the withdrawal fails.
+- Clients maintain a local blacklist of keys with proven misbehavior and refuse to use them.
+- Indexers and guardians that lose community trust see fewer assignments, creating informal economic pressure.
+
+These social measures are weaker than contract-enforced slashing and are not relied upon for the main security argument.
 
 ---
 
