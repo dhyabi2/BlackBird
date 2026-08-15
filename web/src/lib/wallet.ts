@@ -21,6 +21,11 @@ export function validateSeed(seedHex: string): boolean {
   return /^[0-9a-fA-F]{64}$/.test(seedHex);
 }
 
+function ensureNanoPrefix(address: string): string {
+  if (address.startsWith("xrb_")) return "nano_" + address.slice(4);
+  return address;
+}
+
 export function buildSendBlock(
   secretKey: string,
   data: {
@@ -39,13 +44,13 @@ export function buildSendBlock(
     link: data.link,
   });
 
-  // Ensure account field uses nano_ prefix
-  const account = String(block.block.account);
-  if (account.startsWith("xrb_")) {
-    block.block.account = "nano_" + account.slice(4);
-  }
+  const cleaned = { ...block.block };
+  // link_as_account is not a standard state-block field for process
+  delete cleaned.link_as_account;
+  cleaned.account = ensureNanoPrefix(String(cleaned.account));
+  cleaned.representative = ensureNanoPrefix(String(cleaned.representative));
 
-  return block;
+  return { hash: block.hash, block: cleaned };
 }
 
 export { deriveAddress, derivePublicKey };
