@@ -58,16 +58,22 @@ The circuit must be compiled and trusted-setup artifacts generated before real p
 VELA uses [rpc.nano.to](https://rpc.nano.to) as the default Nano RPC endpoint. Set your API key as an environment variable:
 
 ```bash
-export NANO_RPC_API_KEY=RPC-KEY-F2EAA7F8530B453393FC850BDB5342BE20BBA98474CD4DF7A83AB13EBD24C934
+export NANO_RPC_KEY=RPC-KEY-F2EAA7F8530B453393FC850BDB5342BE20BBA98474CD4DF7A83AB13EBD24C934
 ```
 
 Or create a `.env` file in the project root (it is gitignored):
 
 ```bash
-echo 'NANO_RPC_API_KEY=RPC-KEY-F2EAA7F8530B453393FC850BDB5342BE20BBA98474CD4DF7A83AB13EBD24C934' >> .env
+echo 'NANO_RPC_KEY=RPC-KEY-F2EAA7F8530B453393FC850BDB5342BE20BBA98474CD4DF7A83AB13EBD24C934' >> .env
 ```
 
-The key is sent as an `Authorization: Bearer ...` header. Calls work without a key on the free tier, but a key unlocks higher rate limits.
+The key is sent as an `Authorization: <key>` header and also as a `key` body parameter for compatibility with `rpc.nano.to`. Calls work without a key on the free tier, but a key unlocks higher rate limits.
+
+You can override endpoints with a comma-separated list:
+
+```bash
+export NANO_RPC_URL="https://rpc.nano.to,https://node.somenano.com/proxy"
+```
 
 ### 3. Generate a VelaID
 
