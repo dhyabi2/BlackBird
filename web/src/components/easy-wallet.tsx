@@ -67,7 +67,7 @@ export default function EasyWallet() {
 
   const [sourceIndex] = useState(0);
   const [withdrawIndex, setWithdrawIndex] = useState(1);
-  const [denomRaw, setDenomRaw] = useState(DENOMINATIONS[1].raw);
+  const [denomRaw, setDenomRaw] = useState(DENOMINATIONS[0].raw);
   const [epoch, setEpoch] = useState<number | null>(null);
   const [balance, setBalance] = useState<string | null>(null);
   const [sourceInfo, setSourceInfo] = useState<{ frontier?: string; representative?: string } | null>(null);
