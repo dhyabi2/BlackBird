@@ -11,10 +11,16 @@ export default function HomePage() {
           A zero-knowledge privacy pool on Nano. Deposit, wait, and withdraw to
           a fresh address without linking the two on-chain.
         </p>
-        <div className="mt-10 flex justify-center gap-4">
+        <div className="mt-10 flex flex-wrap justify-center gap-4">
+          <Link
+            href="/easy"
+            className="rounded-lg bg-emerald-500 px-6 py-3 font-semibold text-zinc-950 hover:bg-emerald-400"
+          >
+            Easy wallet
+          </Link>
           <Link
             href="/deposit"
-            className="rounded-lg bg-emerald-500 px-6 py-3 font-semibold text-zinc-950 hover:bg-emerald-400"
+            className="rounded-lg border border-zinc-700 bg-zinc-900 px-6 py-3 font-semibold hover:border-zinc-500"
           >
             Make a deposit
           </Link>
@@ -25,6 +31,14 @@ export default function HomePage() {
             Withdraw
           </Link>
         </div>
+        <p className="mt-4 text-sm text-zinc-500">
+          New users should start with the Easy wallet. Advanced users can use the
+          {" "}
+          <Link href="/wallet" className="underline hover:text-zinc-300">
+            full wallet
+          </Link>
+          .
+        </p>
       </div>
 
       <div className="mt-20 grid gap-6 sm:grid-cols-3">
