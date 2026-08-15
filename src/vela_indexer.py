@@ -8,8 +8,10 @@ The production design runs multiple independent indexers whose roots are
 expected to agree deterministically. Clients query several indexers and accept
 a root only if a majority match. See DESIGN.md for the full architecture.
 """
+import functools
 import json
 import os
+import secrets
 import threading
 import time
 from typing import Dict, List, Optional, Tuple
@@ -17,9 +19,11 @@ from typing import Dict, List, Optional, Tuple
 import requests
 from flask import Flask, request, jsonify
 
-from .vela_crypto import pool_pubkey
+from .vela_crypto import pool_pubkey, nano_pubkey_from_address
 from .poseidon_bridge import poseidon_tree
 from .nano_rpc import NanoRPC
+
+GUARDIAN_URL = os.environ.get("VELA_GUARDIAN_URL", "http://127.0.0.1:8081")
 
 EPOCH_SECONDS = 86400
 DENOMINATIONS = {10**29, 10**30, 10**31, 10**32}
@@ -171,12 +175,79 @@ class VelaIndexer:
             return None
 
 
+def require_api_key(f):
+    @functools.wraps(f)
+    def decorated(*args, **kwargs):
+        expected = os.environ.get("VELA_API_KEY", "")
+        if not expected:
+            return jsonify({"error": "API key not configured"}), 500
+        provided = request.headers.get("X-VELA-API-Key", "")
+        if not provided or not secrets.compare_digest(expected, provided):
+            return jsonify({"error": "unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+
 def create_app(indexer: VelaIndexer) -> Flask:
     app = Flask(__name__)
 
     @app.route("/")
     def health():
         return jsonify({"status": "ok", "epoch": indexer.current_epoch()})
+
+    @app.route("/api/status")
+    def api_status():
+        epoch = indexer.current_epoch()
+        roots = []
+        for denom in sorted(DENOMINATIONS):
+            root = indexer.get_root(epoch, denom)
+            roots.append({
+                "denomination": str(denom),
+                "root": hex(root) if root else None,
+            })
+        return jsonify({
+            "status": "ok",
+            "epoch": epoch,
+            "roots": roots,
+            "pool_pubkey": pool_pubkey(10**30).hex(),
+        })
+
+    @app.route("/api/deposit", methods=["POST"])
+    @require_api_key
+    def api_deposit():
+        data = request.json or {}
+        result = indexer.verify_deposit_commitment_pair(
+            data.get("deposit_hash"), data.get("commit_hash")
+        )
+        if result is None:
+            return jsonify({"error": "invalid deposit/commit pair"}), 400
+        indexer.add_commitment(result["epoch"], result["denomination"], int(result["commitment"], 16))
+        return jsonify({"ok": True, "commitment": result["commitment"]})
+
+    @app.route("/api/withdraw", methods=["POST"])
+    @require_api_key
+    def api_withdraw():
+        data = request.json or {}
+        try:
+            destination = data["destination"]
+            P_w = nano_pubkey_from_address(destination)
+            guardian_req = {
+                "epoch": int(data["epoch"]),
+                "denomination": int(data["denomination"]),
+                "P_w": P_w.hex(),
+                "nullifier": data["nullifier"],
+                "proof": data["proof"],
+                "publicSignals": data["publicSignals"],
+            }
+            resp = requests.post(f"{GUARDIAN_URL}/withdraw", json=guardian_req, timeout=30)
+            return (resp.text, resp.status_code, resp.headers.items())
+        except Exception as e:
+            return jsonify({"error": str(e)}), 400
+
+    @app.route("/api/prove", methods=["POST"])
+    @require_api_key
+    def api_prove():
+        return jsonify({"error": "Remote proving is not implemented yet. Generate proofs locally."}), 501
 
     @app.route("/root/<int:epoch>/<int:denomination>")
     def root(epoch, denomination):

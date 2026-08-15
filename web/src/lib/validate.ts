@@ -4,17 +4,22 @@ export const nanoAddressSchema = z
   .string()
   .regex(/^nano_[13]{1}[13456789abcdefghijkmnopqrstuwxyz]{59}$/, "Invalid Nano address");
 
+export const hexHashSchema = z
+  .string()
+  .regex(/^[0-9a-fA-F]{64}$/, "Invalid 64-character hex hash");
+
 export const depositRequestSchema = z.object({
-  account: nanoAddressSchema,
-  amountRaw: z.string().regex(/^\d+$/, "amountRaw must be a non-negative integer string"),
-  commitment: z.string().regex(/^(0x)?[0-9a-fA-F]+$/, "Invalid commitment hex"),
+  deposit_hash: hexHashSchema,
+  commit_hash: hexHashSchema,
 });
 
 export const withdrawRequestSchema = z.object({
+  destination: nanoAddressSchema,
+  epoch: z.number().int().nonnegative(),
+  denomination: z.number().int().positive(),
   nullifier: z.string().min(1, "nullifier is required"),
   proof: z.any(),
   publicSignals: z.array(z.string()),
-  destination: nanoAddressSchema,
 });
 
 export const proveRequestSchema = z.object({

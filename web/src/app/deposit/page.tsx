@@ -3,9 +3,8 @@
 import { useState } from "react";
 
 export default function DepositPage() {
-  const [account, setAccount] = useState("");
-  const [amountRaw, setAmountRaw] = useState("");
-  const [commitment, setCommitment] = useState("");
+  const [depositHash, setDepositHash] = useState("");
+  const [commitHash, setCommitHash] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
 
@@ -18,7 +17,7 @@ export default function DepositPage() {
       const res = await fetch("/api/deposit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ account, amountRaw, commitment }),
+        body: JSON.stringify({ deposit_hash: depositHash, commit_hash: commitHash }),
       });
       const data = await res.json();
 
@@ -26,7 +25,7 @@ export default function DepositPage() {
         throw new Error(data.error || "Deposit request failed");
       }
 
-      setResult({ ok: true, message: "Deposit request accepted." });
+      setResult({ ok: true, message: `Deposit accepted. Commitment: ${data.commitment}` });
     } catch (err) {
       setResult({
         ok: false,
@@ -41,49 +40,35 @@ export default function DepositPage() {
     <div className="mx-auto max-w-2xl px-4 py-12">
       <h1 className="text-3xl font-bold">Deposit</h1>
       <p className="mt-2 text-zinc-400">
-        Generate a commitment locally, then send the exact amount to the pool
-        address and submit the receipt here.
+        Submit the deposit block hash and the commitment block hash. The indexer
+        will verify the pair and add the commitment to the pool.
       </p>
 
       <form onSubmit={handleSubmit} className="mt-8 space-y-6">
         <div>
           <label className="block text-sm font-medium text-zinc-300">
-            Sender Nano account
+            Deposit block hash
           </label>
           <input
             type="text"
             required
-            value={account}
-            onChange={(e) => setAccount(e.target.value)}
-            placeholder="nano_..."
+            value={depositHash}
+            onChange={(e) => setDepositHash(e.target.value)}
+            placeholder="ABC123..."
             className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-zinc-100 focus:border-emerald-500 focus:outline-none"
           />
         </div>
 
         <div>
           <label className="block text-sm font-medium text-zinc-300">
-            Amount (raw)
+            Commitment block hash
           </label>
           <input
             type="text"
             required
-            value={amountRaw}
-            onChange={(e) => setAmountRaw(e.target.value)}
-            placeholder="1000000000000000000000000000000"
-            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-zinc-100 focus:border-emerald-500 focus:outline-none"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-zinc-300">
-            Commitment
-          </label>
-          <input
-            type="text"
-            required
-            value={commitment}
-            onChange={(e) => setCommitment(e.target.value)}
-            placeholder="0x..."
+            value={commitHash}
+            onChange={(e) => setCommitHash(e.target.value)}
+            placeholder="DEF456..."
             className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-zinc-100 focus:border-emerald-500 focus:outline-none"
           />
         </div>

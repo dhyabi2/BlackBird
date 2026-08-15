@@ -35,18 +35,16 @@ async function velaFetch<T = unknown>(
 
 export async function getPoolStatus() {
   return velaFetch<{
-    root?: string;
-    denomination?: string;
-    block_height?: number;
-    guardian_count?: number;
-    active?: boolean;
+    status?: string;
+    epoch?: number;
+    roots?: { denomination: string; root: string | null }[];
+    pool_pubkey?: string;
   }>("/api/status");
 }
 
 export async function submitDeposit(body: {
-  account: string;
-  amountRaw: string;
-  commitment: string;
+  deposit_hash: string;
+  commit_hash: string;
 }) {
   return velaFetch("/api/deposit", {
     method: "POST",
@@ -55,10 +53,12 @@ export async function submitDeposit(body: {
 }
 
 export async function submitWithdrawal(body: {
+  destination: string;
+  epoch: number;
+  denomination: number;
   nullifier: string;
   proof: unknown;
   publicSignals: string[];
-  destination: string;
 }) {
   return velaFetch("/api/withdraw", {
     method: "POST",
