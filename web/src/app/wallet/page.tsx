@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { deriveLegacyAccount, buildSendBlock } from "@/lib/wallet";
-import { getPoolAddress, getPoolStatus, requestProof, submitDeposit, submitWithdrawal } from "@/lib/vela-backend";
 import { computeCommitment, computeNullifier, hexToBytes, bytesToHex } from "@/lib/vela-crypto";
 import { blake2b } from "blakejs";
 
@@ -22,6 +21,24 @@ function deriveSecretBytes(seedHex: string, P_w_hex: string, salt: string): Uint
   input.set(PwBytes, seedBytes.length);
   input.set(saltBytes, seedBytes.length + PwBytes.length);
   return blake2b(input, undefined, 32) as Uint8Array;
+}
+
+async function apiPost(path: string, body: unknown) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Request failed: ${res.status}`);
+  return data;
+}
+
+async function apiGet(path: string) {
+  const res = await fetch(path);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Request failed: ${res.status}`);
+  return data;
 }
 
 export default function WalletPage() {
@@ -53,8 +70,8 @@ export default function WalletPage() {
   }, [seed, withdrawIndex]);
 
   useEffect(() => {
-    getPoolStatus().then((s) => setStatus(s)).catch(() => setStatus(null));
-    getPoolAddress(Number(denomRaw)).then((p) => setPoolPub(p.pool_pubkey ?? null)).catch(() => setPoolPub(null));
+    apiGet("/api/status").then((s) => setStatus(s)).catch(() => setStatus(null));
+    apiGet(`/api/pool_address/${denomRaw}`).then((p) => setPoolPub(p.pool_pubkey ?? null)).catch(() => setPoolPub(null));
   }, [denomRaw]);
 
   function log(msg: string) {
@@ -62,20 +79,14 @@ export default function WalletPage() {
   }
 
   async function fetchWork(hash: string): Promise<string> {
-    const res = await fetch("/api/work", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hash }),
-    });
-    const data = await res.json();
-    if (!res.ok || !data.work) throw new Error(data.error || "work_generate failed");
+    const data = await apiPost("/api/work", { hash });
+    if (!data.work) throw new Error("work_generate failed");
     return data.work;
   }
 
   async function fetchAccountInfo(account: string) {
-    const res = await fetch(`/api/account_info?account=${encodeURIComponent(account)}`);
-    const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error || "account_info failed");
+    const data = await apiGet(`/api/account_info?account=${encodeURIComponent(account)}`);
+    if (data.error) throw new Error(data.error);
     return data as {
       balance: string;
       frontier: string;
@@ -85,14 +96,7 @@ export default function WalletPage() {
   }
 
   async function broadcastBlock(block: Record<string, unknown>) {
-    const res = await fetch("/api/broadcast", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ block }),
-    });
-    const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error || "broadcast failed");
-    return data;
+    return apiPost("/api/broadcast", { block });
   }
 
   async function handleDeposit() {
@@ -102,7 +106,8 @@ export default function WalletPage() {
 
     try {
       const denom = Number(denomRaw);
-      const poolAddress = (await (await fetch(`/api/pool_address/${denom}`)).json()).pool_pubkey;
+      const poolData = await apiGet(`/api/pool_address/${denom}`);
+      const poolAddress = poolData.pool_pubkey as string;
       const S_pub = hexToBytes(poolPub);
       const P_w = hexToBytes(withdraw.publicKey);
       const n = deriveSecretBytes(seed, withdraw.publicKey, "vela/n");
@@ -146,10 +151,10 @@ export default function WalletPage() {
       await broadcastBlock(commitBlock.block);
       log("Commitment broadcasted");
 
-      const depositRes = (await submitDeposit({
+      const depositRes = await apiPost("/api/deposit", {
         deposit_hash: depositBlock.hash,
         commit_hash: commitBlock.hash,
-      })) as { commitment?: string };
+      }) as { commitment?: string };
       log(`Indexer accepted commitment: ${depositRes.commitment}`);
     } catch (err) {
       log(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
@@ -172,14 +177,13 @@ export default function WalletPage() {
       log(`Withdraw to: ${withdraw.address}`);
       log(`Nullifier: ${nullifier.toString(16)}`);
 
-      const proofRes = await requestProof({
+      const proofRes = await apiPost("/api/prove", {
         n: bytesToHex(n),
         t: bytesToHex(t),
         P_w: withdraw.publicKey,
         nullifier: nullifier.toString(16),
         denomination: denom,
         epoch: status.epoch,
-        leaf_index: 0,
       });
 
       if (!proofRes.proof || !proofRes.publicSignals) {
@@ -187,14 +191,14 @@ export default function WalletPage() {
       }
       log("Proof generated");
 
-      const withdrawRes = (await submitWithdrawal({
+      const withdrawRes = await apiPost("/api/withdraw", {
         destination: withdraw.address,
         epoch: status.epoch,
         denomination: denom,
         nullifier: nullifier.toString(16),
         proof: proofRes.proof,
         publicSignals: proofRes.publicSignals,
-      })) as { block_hash?: string };
+      }) as { block_hash?: string };
       log(`Withdrawal submitted: ${withdrawRes.block_hash || "ok"}`);
     } catch (err) {
       log(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
