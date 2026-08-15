@@ -279,6 +279,17 @@ Multiple coordinators may operate at once. A client can simultaneously submit th
 
 This race is not harmful to the withdrawing client: the confirmed block must use the `P_w` bound in the proof and intent hash, so an honest client's funds always arrive at the intended address.
 
+### Nullifier racing and double-signing
+
+A nullifier can only be spent once. The protocol enforces this at several layers:
+
+1. **Guardian check**: before returning a partial signature, each guardian verifies that the nullifier is not already in its local spent set. Guardians also track "in-flight" nullifiers for which they have recently signed and reject duplicate signing attempts within a short window.
+2. **Nano confirmation**: if two valid blocks spending the same nullifier are broadcast, Nano's Open Representative Voting confirms one first. The losing block is not confirmed; its nullifier remains unspent from the ledger's perspective.
+3. **Post-confirmation rejection**: after the first block is confirmed, all honest guardians reject future signing requests for that nullifier.
+4. **Slashing deterrent**: if two conflicting signed withdrawals are ever confirmed, the offending guardian signatures serve as fraud proofs for the external slashing contract (see Economic Security).
+
+This design does not require a mempool or global timestamps. It relies on guardian vigilance and Nano's single-account-chain ordering: only one block per pool account can be confirmed at a given height.
+
 ---
 
 ## 8. Withdrawal Flow
