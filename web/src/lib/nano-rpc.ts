@@ -76,3 +76,14 @@ export async function getAccountInfo(account: string) {
     representative: "true",
   });
 }
+
+export async function getPendingBlocks(account: string) {
+  return nanoRpcCall<{
+    blocks?: Record<string, { amount: string; source: string }>;
+  }>("pending", {
+    account,
+    count: 20,
+    source: true,
+    include_active: true,
+  });
+}
