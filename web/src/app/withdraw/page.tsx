@@ -27,7 +27,7 @@ export default function WithdrawPage() {
         body: JSON.stringify({
           destination,
           epoch: Number(epoch),
-          denomination: Number(denomination),
+          denomination: denomination,
           nullifier,
           proof,
           publicSignals,

@@ -1,232 +1,1308 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
-             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
-             xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC"
-             xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI"
-             id="VELA_v2_threshold"
-             targetNamespace="http://vela.protocol"
-             exporter="Kimi Code CLI"
-             exporterVersion="1.0">
-
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC" xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI" id="VELA_v2_full" targetNamespace="http://vela.protocol" exporter="Kimi Code CLI" exporterVersion="2.0">
   <collaboration id="Collaboration_1">
-    <participant id="Participant_Depositor" name="Depositor" processRef="Process_Depositor"/>
+    <participant id="Participant_Client" name="Client / e2e Harness" processRef="Process_Client"/>
+    <participant id="Participant_WebApp" name="Web App (Next.js API proxy)" processRef="Process_WebApp"/>
+    <participant id="Participant_NanoRPC" name="Nano RPC (rpc.nano.to)" processRef="Process_NanoRPC"/>
+    <participant id="Participant_Indexer" name="VELA Indexer" processRef="Process_Indexer"/>
+    <participant id="Participant_Guardian" name="VELA Guardian" processRef="Process_Guardian"/>
     <participant id="Participant_Ledger" name="Nano Ledger" processRef="Process_Ledger"/>
-    <participant id="Participant_Indexer" name="Indexer Network" processRef="Process_Indexer"/>
-    <participant id="Participant_Guardian" name="Guardian Network (t-of-n FROST)" processRef="Process_Guardian"/>
-    <participant id="Participant_Coordinator" name="Withdrawer / Coordinator" processRef="Process_Coordinator"/>
-
-    <!-- Deposit phase message flows -->
-    <messageFlow id="MF_DepositBlock" sourceRef="Task_BroadcastDeposit" targetRef="Start_DepositReceived"/>
-    <messageFlow id="MF_CommitBlock" sourceRef="Task_BroadcastCommitment" targetRef="Start_CommitmentReceived"/>
-
-    <!-- Ledger to indexer -->
-    <messageFlow id="MF_LedgerToIndexer" sourceRef="Task_ConfirmedOnChain" targetRef="Start_IndexerScan"/>
-
-    <!-- Indexer to coordinator -->
-    <messageFlow id="MF_RootToCoordinator" sourceRef="Task_PublishRoot" targetRef="Task_FetchRoot"/>
-    <messageFlow id="MF_ProofToCoordinator" sourceRef="Task_ServeProof" targetRef="Task_FetchProof"/>
-
-    <!-- Coordinator to guardians -->
-    <messageFlow id="MF_RequestToGuardian" sourceRef="Task_RequestPartialSig" targetRef="Start_PartialSigRequest"/>
-    <messageFlow id="MF_PartialSigToCoordinator" sourceRef="Task_ReturnPartialSig" targetRef="Task_CollectPartialSigs"/>
-
-    <!-- Coordinator to ledger -->
-    <messageFlow id="MF_WithdrawBlock" sourceRef="Task_BroadcastWithdrawal" targetRef="Start_WithdrawalReceived"/>
+    <messageFlow id="MF_ClientDeposit" sourceRef="Task_ClientSubmitDeposit" targetRef="Start_WebDeposit"/>
+    <messageFlow id="MF_ClientProve" sourceRef="Task_ClientRequestProof" targetRef="Start_WebProve"/>
+    <messageFlow id="MF_ClientWithdraw" sourceRef="Task_ClientRequestWithdraw" targetRef="Start_WebWithdraw"/>
+    <messageFlow id="MF_ClientAccountInfo" sourceRef="Task_ClientGetAccountInfo" targetRef="Start_WebAccountInfo"/>
+    <messageFlow id="MF_ClientPending" sourceRef="Task_ClientGetPending" targetRef="Start_WebPending"/>
+    <messageFlow id="MF_ClientWork" sourceRef="Task_ClientGetWork" targetRef="Start_WebWork"/>
+    <messageFlow id="MF_ClientBroadcast" sourceRef="Task_ClientBroadcast" targetRef="Start_WebBroadcast"/>
+    <messageFlow id="MF_WebToNanoRPC" sourceRef="Task_WebCallNanoRPC" targetRef="Start_NanoRPC"/>
+    <messageFlow id="MF_WebToIndexerDeposit" sourceRef="Task_WebForwardDeposit" targetRef="Start_IndexerDeposit"/>
+    <messageFlow id="MF_WebToIndexerProve" sourceRef="Task_WebForwardProve" targetRef="Start_IndexerProve"/>
+    <messageFlow id="MF_WebToGuardian" sourceRef="Task_WebForwardWithdraw" targetRef="Start_GuardianWithdraw"/>
+    <messageFlow id="MF_IndexerToNanoRPC" sourceRef="Task_IndexerBlocksInfo" targetRef="Start_NanoRPC"/>
+    <messageFlow id="MF_GuardianToNanoRPC" sourceRef="Task_GuardianAccountInfo" targetRef="Start_NanoRPC"/>
+    <messageFlow id="MF_NanoRPCToLedger" sourceRef="Task_NanoRPCBroadcast" targetRef="Start_LedgerBlock"/>
+    <messageFlow id="MF_LedgerToIndexer" sourceRef="Task_LedgerConfirmed" targetRef="Start_IndexerScan"/>
   </collaboration>
-
-  <!-- ============================================================ -->
-  <!-- Depositor Process                                            -->
-  <!-- ============================================================ -->
-  <process id="Process_Depositor" isExecutable="false">
-    <startEvent id="Start_Deposit" name="User wants to deposit"/>
-    <task id="Task_DeriveStealth" name="Derive stealth withdrawal address P_w"/>
-    <task id="Task_GenerateSecrets" name="Generate secrets n and t"/>
-    <task id="Task_ComputeCommitment" name="Compute C = Poseidon(n, t, P_w, S_pub)"/>
-    <task id="Task_CreateDepositBlock" name="Create deposit block S → Pool"/>
-    <task id="Task_BroadcastDeposit" name="Broadcast deposit block to Nano network"/>
-    <task id="Task_CreateCommitmentBlock" name="Create commitment block with link = C"/>
-    <task id="Task_BroadcastCommitment" name="Broadcast commitment block to Nano network"/>
-    <endEvent id="End_DepositDone" name="Deposit published"/>
-
-    <sequenceFlow id="D1" sourceRef="Start_Deposit" targetRef="Task_DeriveStealth"/>
-    <sequenceFlow id="D2" sourceRef="Task_DeriveStealth" targetRef="Task_GenerateSecrets"/>
-    <sequenceFlow id="D3" sourceRef="Task_GenerateSecrets" targetRef="Task_ComputeCommitment"/>
-    <sequenceFlow id="D4" sourceRef="Task_ComputeCommitment" targetRef="Task_CreateDepositBlock"/>
-    <sequenceFlow id="D5" sourceRef="Task_CreateDepositBlock" targetRef="Task_BroadcastDeposit"/>
-    <sequenceFlow id="D6" sourceRef="Task_BroadcastDeposit" targetRef="Task_CreateCommitmentBlock"/>
-    <sequenceFlow id="D7" sourceRef="Task_CreateCommitmentBlock" targetRef="Task_BroadcastCommitment"/>
-    <sequenceFlow id="D8" sourceRef="Task_BroadcastCommitment" targetRef="End_DepositDone"/>
+  <process id="Process_Client" isExecutable="false">
+    <laneSet id="LaneSet_Client">
+      <lane id="Lane_User" name="User / Test Script">
+        <flowNodeRef>Start_Client</flowNodeRef>
+        <flowNodeRef>Task_LoadWallets</flowNodeRef>
+        <flowNodeRef>Task_ExternalFund</flowNodeRef>
+        <flowNodeRef>Task_ReceiveFunding</flowNodeRef>
+        <flowNodeRef>Gateway_HasBalance</flowNodeRef>
+        <flowNodeRef>SubProcess_Deposit</flowNodeRef>
+        <flowNodeRef>SubProcess_Withdraw</flowNodeRef>
+        <flowNodeRef>Task_ReceiveWithdrawal</flowNodeRef>
+        <flowNodeRef>End_ClientDone</flowNodeRef>
+        <flowNodeRef>End_ClientFail</flowNodeRef>
+        <flowNodeRef>Task_ClientGetAccountInfo</flowNodeRef>
+        <flowNodeRef>Task_ClientGetPending</flowNodeRef>
+        <flowNodeRef>Task_ClientGetWork</flowNodeRef>
+      </lane>
+    </laneSet>
+    <startEvent id="Start_Client" name="Run e2e / user action"/>
+    <task id="Task_LoadWallets" name="Load test-wallets.json / connect wallet"/>
+    <task id="Task_ExternalFund" name="External funder sends XNO to source address"/>
+    <task id="Task_ReceiveFunding" name="Client creates &amp; broadcasts receive block"/>
+    <exclusiveGateway id="Gateway_HasBalance" name="Balance ≥ denom + 1 raw?"/>
+    <subProcess id="SubProcess_Deposit" name="Deposit + Commitment">
+      <startEvent id="Start_SubDeposit" name="Begin deposit"/>
+      <task id="Task_DeriveStealth" name="Derive stealth withdrawal key P_w from seed[1]"/>
+      <task id="Task_GenerateSecrets" name="Derive n = Blake2b(seed|P_w|&quot;vela/n&quot;), t similarly"/>
+      <task id="Task_FetchPoolInfo" name="Fetch pool public key S_pub for denomination"/>
+      <task id="Task_ComputeCommitment" name="Compute C = Poseidon(1, n, t, P_w, S_pub)"/>
+      <task id="Task_CreateDepositBlock" name="Create state send: source → pool (denom)"/>
+      <task id="Task_ComputeDepositWork" name="Compute PoW on source frontier (send threshold)"/>
+      <task id="Task_BroadcastDeposit" name="Broadcast deposit block"/>
+      <task id="Task_CreateCommitmentBlock" name="Create state send: source → C (1 raw)"/>
+      <task id="Task_ComputeCommitmentWork" name="Compute PoW on deposit hash (send threshold)"/>
+      <task id="Task_BroadcastCommitment" name="Broadcast commitment block"/>
+      <endEvent id="End_SubDeposit" name="Deposit/commitment on-chain"/>
+      <sequenceFlow id="SD1" sourceRef="Start_SubDeposit" targetRef="Task_DeriveStealth"/>
+      <sequenceFlow id="SD2" sourceRef="Task_DeriveStealth" targetRef="Task_GenerateSecrets"/>
+      <sequenceFlow id="SD3" sourceRef="Task_GenerateSecrets" targetRef="Task_FetchPoolInfo"/>
+      <sequenceFlow id="SD4" sourceRef="Task_FetchPoolInfo" targetRef="Task_ComputeCommitment"/>
+      <sequenceFlow id="SD5" sourceRef="Task_ComputeCommitment" targetRef="Task_CreateDepositBlock"/>
+      <sequenceFlow id="SD6" sourceRef="Task_CreateDepositBlock" targetRef="Task_ComputeDepositWork"/>
+      <sequenceFlow id="SD7" sourceRef="Task_ComputeDepositWork" targetRef="Task_BroadcastDeposit"/>
+      <sequenceFlow id="SD8" sourceRef="Task_BroadcastDeposit" targetRef="Task_CreateCommitmentBlock"/>
+      <sequenceFlow id="SD9" sourceRef="Task_CreateCommitmentBlock" targetRef="Task_ComputeCommitmentWork"/>
+      <sequenceFlow id="SD10" sourceRef="Task_ComputeCommitmentWork" targetRef="Task_BroadcastCommitment"/>
+      <sequenceFlow id="SD11" sourceRef="Task_BroadcastCommitment" targetRef="End_SubDeposit"/>
+    </subProcess>
+    <subProcess id="SubProcess_Withdraw" name="Withdrawal">
+      <startEvent id="Start_SubWithdraw" name="Begin withdrawal"/>
+      <task id="Task_RecoverHashes" name="(Resume) recover deposit/commit hashes from account history"/>
+      <task id="Task_ClientSubmitDeposit" name="POST /api/deposit {deposit_hash, commit_hash}" isForCompensation="false"/>
+      <task id="Task_ClientRequestProof" name="POST /api/prove {n, t, P_w, nullifier, denom, epoch}" isForCompensation="false"/>
+      <task id="Task_GenerateZKProof" name="Indexer/snarkjs generates Groth16 proof"/>
+      <task id="Task_ClientRequestWithdraw" name="POST /api/withdraw {destination, proof, publicSignals}" isForCompensation="false"/>
+      <task id="Task_InspectGuardianBlock" name="Receive signed block &amp; block_hash from guardian"/>
+      <task id="Task_ComputeWithdrawWork" name="Compute PoW on block.previous (pool frontier)"/>
+      <task id="Task_ClientBroadcast" name="POST /api/broadcast signed block" isForCompensation="false"/>
+      <endEvent id="End_SubWithdraw" name="Withdrawal broadcast"/>
+      <sequenceFlow id="SW1" sourceRef="Start_SubWithdraw" targetRef="Task_RecoverHashes"/>
+      <sequenceFlow id="SW2" sourceRef="Task_RecoverHashes" targetRef="Task_ClientSubmitDeposit"/>
+      <sequenceFlow id="SW3" sourceRef="Task_ClientSubmitDeposit" targetRef="Task_ClientRequestProof"/>
+      <sequenceFlow id="SW4" sourceRef="Task_ClientRequestProof" targetRef="Task_GenerateZKProof"/>
+      <sequenceFlow id="SW5" sourceRef="Task_GenerateZKProof" targetRef="Task_ClientRequestWithdraw"/>
+      <sequenceFlow id="SW6" sourceRef="Task_ClientRequestWithdraw" targetRef="Task_InspectGuardianBlock"/>
+      <sequenceFlow id="SW7" sourceRef="Task_InspectGuardianBlock" targetRef="Task_ComputeWithdrawWork"/>
+      <sequenceFlow id="SW8" sourceRef="Task_ComputeWithdrawWork" targetRef="Task_ClientBroadcast"/>
+      <sequenceFlow id="SW9" sourceRef="Task_ClientBroadcast" targetRef="End_SubWithdraw"/>
+    </subProcess>
+    <task id="Task_ReceiveWithdrawal" name="Create &amp; broadcast receive block to P_w (open/ receive)"/>
+    <endEvent id="End_ClientDone" name="Cycle complete"/>
+    <endEvent id="End_ClientFail" name="Insufficient balance / failure"/>
+    <sequenceFlow id="C0" sourceRef="Start_Client" targetRef="Task_LoadWallets"/>
+    <sequenceFlow id="C2" sourceRef="Task_ExternalFund" targetRef="Task_ReceiveFunding"/>
+    <sequenceFlow id="C3" sourceRef="Task_ReceiveFunding" targetRef="Gateway_HasBalance"/>
+    <sequenceFlow id="C4_Yes" sourceRef="Gateway_HasBalance" targetRef="SubProcess_Deposit" name="Yes"/>
+    <sequenceFlow id="C4_No" sourceRef="Gateway_HasBalance" targetRef="End_ClientFail" name="No"/>
+    <sequenceFlow id="C5" sourceRef="SubProcess_Deposit" targetRef="SubProcess_Withdraw"/>
+    <sequenceFlow id="C6" sourceRef="SubProcess_Withdraw" targetRef="Task_ReceiveWithdrawal"/>
+    <sequenceFlow id="C7" sourceRef="Task_ReceiveWithdrawal" targetRef="End_ClientDone"/>
+    <task id="Task_ClientGetAccountInfo" name="GET /api/account_info"/>
+    <task id="Task_ClientGetPending" name="GET /api/pending"/>
+    <task id="Task_ClientGetWork" name="POST /api/work"/>
+    <sequenceFlow sourceRef="Task_LoadWallets" targetRef="Task_ClientGetAccountInfo" id="Flow_1000"/>
+    <sequenceFlow sourceRef="Task_ClientGetAccountInfo" targetRef="Task_ClientGetPending" id="Flow_1001"/>
+    <sequenceFlow sourceRef="Task_ClientGetPending" targetRef="Task_ClientGetWork" id="Flow_1002"/>
+    <sequenceFlow sourceRef="Task_ClientGetWork" targetRef="Task_ExternalFund" id="Flow_1003"/>
   </process>
-
-  <!-- ============================================================ -->
-  <!-- Nano Ledger Process                                          -->
-  <!-- ============================================================ -->
+  <process id="Process_WebApp" isExecutable="false">
+    <laneSet id="LaneSet_WebApp">
+      <lane id="Lane_API" name="API Routes">
+        <flowNodeRef>Start_WebAccountInfo</flowNodeRef>
+        <flowNodeRef>Task_ValidateAccountInfo</flowNodeRef>
+        <flowNodeRef>Start_WebPending</flowNodeRef>
+        <flowNodeRef>Task_ValidatePending</flowNodeRef>
+        <flowNodeRef>Start_WebWork</flowNodeRef>
+        <flowNodeRef>Task_ValidateWork</flowNodeRef>
+        <flowNodeRef>Start_WebBroadcast</flowNodeRef>
+        <flowNodeRef>Task_ValidateBroadcast</flowNodeRef>
+        <flowNodeRef>Start_WebDeposit</flowNodeRef>
+        <flowNodeRef>Task_ValidateDepositReq</flowNodeRef>
+        <flowNodeRef>Start_WebProve</flowNodeRef>
+        <flowNodeRef>Task_ValidateProveReq</flowNodeRef>
+        <flowNodeRef>Start_WebWithdraw</flowNodeRef>
+        <flowNodeRef>Task_ValidateWithdrawReq</flowNodeRef>
+        <flowNodeRef>Task_WebCallNanoRPC</flowNodeRef>
+        <flowNodeRef>Task_WebForwardDeposit</flowNodeRef>
+        <flowNodeRef>Task_WebForwardProve</flowNodeRef>
+        <flowNodeRef>Task_WebForwardWithdraw</flowNodeRef>
+        <flowNodeRef>Task_WebReturnResponse</flowNodeRef>
+        <flowNodeRef>End_WebOK</flowNodeRef>
+        <flowNodeRef>End_WebError</flowNodeRef>
+      </lane>
+    </laneSet>
+    <startEvent id="Start_WebAccountInfo" name="GET /api/account_info"/>
+    <task id="Task_ValidateAccountInfo" name="Validate address, rate limit, CORS"/>
+    <sequenceFlow id="WA1" sourceRef="Start_WebAccountInfo" targetRef="Task_ValidateAccountInfo"/>
+    <sequenceFlow id="WA2" sourceRef="Task_ValidateAccountInfo" targetRef="Task_WebCallNanoRPC"/>
+    <startEvent id="Start_WebPending" name="GET /api/pending"/>
+    <task id="Task_ValidatePending" name="Validate address, rate limit"/>
+    <sequenceFlow id="WP1" sourceRef="Start_WebPending" targetRef="Task_ValidatePending"/>
+    <sequenceFlow id="WP2" sourceRef="Task_ValidatePending" targetRef="Task_WebCallNanoRPC"/>
+    <startEvent id="Start_WebWork" name="POST /api/work"/>
+    <task id="Task_ValidateWork" name="Validate hash &amp; difficulty, rate limit"/>
+    <sequenceFlow id="WW1" sourceRef="Start_WebWork" targetRef="Task_ValidateWork"/>
+    <sequenceFlow id="WW2" sourceRef="Task_ValidateWork" targetRef="Task_WebCallNanoRPC"/>
+    <startEvent id="Start_WebBroadcast" name="POST /api/broadcast"/>
+    <task id="Task_ValidateBroadcast" name="Validate block shape, rate limit"/>
+    <sequenceFlow id="WB1" sourceRef="Start_WebBroadcast" targetRef="Task_ValidateBroadcast"/>
+    <sequenceFlow id="WB2" sourceRef="Task_ValidateBroadcast" targetRef="Task_WebCallNanoRPC"/>
+    <startEvent id="Start_WebDeposit" name="POST /api/deposit"/>
+    <task id="Task_ValidateDepositReq" name="Validate hashes, API key"/>
+    <sequenceFlow id="WD1" sourceRef="Start_WebDeposit" targetRef="Task_ValidateDepositReq"/>
+    <sequenceFlow id="WD2" sourceRef="Task_ValidateDepositReq" targetRef="Task_WebForwardDeposit"/>
+    <startEvent id="Start_WebProve" name="POST /api/prove"/>
+    <task id="Task_ValidateProveReq" name="Validate n, t, P_w, nullifier, denom, epoch"/>
+    <sequenceFlow id="WPr1" sourceRef="Start_WebProve" targetRef="Task_ValidateProveReq"/>
+    <sequenceFlow id="WPr2" sourceRef="Task_ValidateProveReq" targetRef="Task_WebForwardProve"/>
+    <startEvent id="Start_WebWithdraw" name="POST /api/withdraw"/>
+    <task id="Task_ValidateWithdrawReq" name="Validate destination, proof, publicSignals"/>
+    <sequenceFlow id="WWi1" sourceRef="Start_WebWithdraw" targetRef="Task_ValidateWithdrawReq"/>
+    <sequenceFlow id="WWi2" sourceRef="Task_ValidateWithdrawReq" targetRef="Task_WebForwardWithdraw"/>
+    <task id="Task_WebCallNanoRPC" name="Proxy to Nano RPC (account_info, pending, work_generate, process)"/>
+    <task id="Task_WebForwardDeposit" name="Forward to VELA Indexer /api/deposit"/>
+    <task id="Task_WebForwardProve" name="Forward to VELA Indexer /api/prove"/>
+    <task id="Task_WebForwardWithdraw" name="Forward to VELA Guardian /withdraw"/>
+    <task id="Task_WebReturnResponse" name="Return JSON response to client"/>
+    <endEvent id="End_WebOK" name="200 OK"/>
+    <endEvent id="End_WebError" name="4xx/5xx error"/>
+    <sequenceFlow id="W1" sourceRef="Task_WebCallNanoRPC" targetRef="Task_WebReturnResponse"/>
+    <sequenceFlow id="W2" sourceRef="Task_WebForwardDeposit" targetRef="Task_WebReturnResponse"/>
+    <sequenceFlow id="W3" sourceRef="Task_WebForwardProve" targetRef="Task_WebReturnResponse"/>
+    <sequenceFlow id="W4" sourceRef="Task_WebForwardWithdraw" targetRef="Task_WebReturnResponse"/>
+    <sequenceFlow id="W5" sourceRef="Task_WebReturnResponse" targetRef="End_WebOK"/>
+  </process>
+  <process id="Process_NanoRPC" isExecutable="false">
+    <laneSet id="LaneSet_NanoRPC">
+      <lane id="Lane_RPCNode" name="rpc.nano.to">
+        <flowNodeRef>Start_NanoRPC</flowNodeRef>
+        <flowNodeRef>Task_AuthRequest</flowNodeRef>
+        <flowNodeRef>Gateway_RPCAction</flowNodeRef>
+        <flowNodeRef>Task_RPCAccountInfo</flowNodeRef>
+        <flowNodeRef>Task_RPCPending</flowNodeRef>
+        <flowNodeRef>Task_RPCWorkGenerate</flowNodeRef>
+        <flowNodeRef>Task_RPCProcess</flowNodeRef>
+        <flowNodeRef>Task_RPCBlocksInfo</flowNodeRef>
+        <flowNodeRef>Task_RPCReturn</flowNodeRef>
+        <flowNodeRef>End_NanoRPC</flowNodeRef>
+      </lane>
+    </laneSet>
+    <startEvent id="Start_NanoRPC" name="RPC request received"/>
+    <task id="Task_AuthRequest" name="Authenticate API key"/>
+    <exclusiveGateway id="Gateway_RPCAction" name="Action?"/>
+    <task id="Task_RPCAccountInfo" name="account_info"/>
+    <task id="Task_RPCPending" name="pending / receivable"/>
+    <task id="Task_RPCWorkGenerate" name="work_generate (send/receive difficulty)"/>
+    <task id="Task_RPCProcess" name="process (broadcast block)"/>
+    <task id="Task_RPCBlocksInfo" name="blocks_info"/>
+    <task id="Task_RPCReturn" name="Return JSON result"/>
+    <endEvent id="End_NanoRPC" name="RPC response"/>
+    <sequenceFlow id="NR1" sourceRef="Start_NanoRPC" targetRef="Task_AuthRequest"/>
+    <sequenceFlow id="NR2" sourceRef="Task_AuthRequest" targetRef="Gateway_RPCAction"/>
+    <sequenceFlow id="NR3_Account" sourceRef="Gateway_RPCAction" targetRef="Task_RPCAccountInfo" name="account_info"/>
+    <sequenceFlow id="NR3_Pending" sourceRef="Gateway_RPCAction" targetRef="Task_RPCPending" name="pending"/>
+    <sequenceFlow id="NR3_Work" sourceRef="Gateway_RPCAction" targetRef="Task_RPCWorkGenerate" name="work_generate"/>
+    <sequenceFlow id="NR3_Process" sourceRef="Gateway_RPCAction" targetRef="Task_RPCProcess" name="process"/>
+    <sequenceFlow id="NR3_Blocks" sourceRef="Gateway_RPCAction" targetRef="Task_RPCBlocksInfo" name="blocks_info"/>
+    <sequenceFlow id="NR4_Account" sourceRef="Task_RPCAccountInfo" targetRef="Task_NanoRPCBroadcast"/>
+    <sequenceFlow id="NR4_Pending" sourceRef="Task_RPCPending" targetRef="Task_NanoRPCBroadcast"/>
+    <sequenceFlow id="NR4_Work" sourceRef="Task_RPCWorkGenerate" targetRef="Task_NanoRPCBroadcast"/>
+    <sequenceFlow id="NR4_Process" sourceRef="Task_RPCProcess" targetRef="Task_NanoRPCBroadcast"/>
+    <sequenceFlow id="NR4_Blocks" sourceRef="Task_RPCBlocksInfo" targetRef="Task_NanoRPCBroadcast"/>
+    <task id="Task_NanoRPCBroadcast" name="Relay to Nano network node"/>
+    <sequenceFlow id="NR5" sourceRef="Task_NanoRPCBroadcast" targetRef="Task_RPCReturn"/>
+    <sequenceFlow id="NR6" sourceRef="Task_RPCReturn" targetRef="End_NanoRPC"/>
+  </process>
   <process id="Process_Ledger" isExecutable="false">
-    <startEvent id="Start_DepositReceived" name="Deposit block received"/>
-    <task id="Task_ValidateDeposit" name="Validate state block and signature"/>
-    <startEvent id="Start_CommitmentReceived" name="Commitment block received"/>
-    <task id="Task_ValidateCommitment" name="Validate state block and link"/>
-    <task id="Task_ConfirmedOnChain" name="Confirm blocks via ORV consensus"/>
-    <startEvent id="Start_WithdrawalReceived" name="Withdrawal block received"/>
-    <task id="Task_ValidateWithdrawal" name="Validate signature and account state"/>
-    <endEvent id="End_LedgerDeposit" name="Deposit/commitment confirmed"/>
-    <endEvent id="End_LedgerWithdrawal" name="Withdrawal confirmed"/>
-
-    <sequenceFlow id="L1" sourceRef="Start_DepositReceived" targetRef="Task_ValidateDeposit"/>
-    <sequenceFlow id="L2" sourceRef="Start_CommitmentReceived" targetRef="Task_ValidateCommitment"/>
-    <sequenceFlow id="L3" sourceRef="Task_ValidateDeposit" targetRef="Task_ConfirmedOnChain"/>
-    <sequenceFlow id="L4" sourceRef="Task_ValidateCommitment" targetRef="Task_ConfirmedOnChain"/>
-    <sequenceFlow id="L5" sourceRef="Task_ConfirmedOnChain" targetRef="End_LedgerDeposit"/>
-    <sequenceFlow id="L6" sourceRef="Start_WithdrawalReceived" targetRef="Task_ValidateWithdrawal"/>
-    <sequenceFlow id="L7" sourceRef="Task_ValidateWithdrawal" targetRef="End_LedgerWithdrawal"/>
+    <laneSet id="LaneSet_Ledger">
+      <lane id="Lane_NanoNode" name="Nano nodes">
+        <flowNodeRef>Start_LedgerBlock</flowNodeRef>
+        <flowNodeRef>Task_ValidateBlockFormat</flowNodeRef>
+        <flowNodeRef>Task_ValidateWork</flowNodeRef>
+        <flowNodeRef>Task_ValidateSignature</flowNodeRef>
+        <flowNodeRef>Task_CheckAccountState</flowNodeRef>
+        <flowNodeRef>Task_ORVConsensus</flowNodeRef>
+        <flowNodeRef>Task_LedgerConfirmed</flowNodeRef>
+        <flowNodeRef>End_LedgerBlock</flowNodeRef>
+      </lane>
+    </laneSet>
+    <startEvent id="Start_LedgerBlock" name="Block received from RPC"/>
+    <task id="Task_ValidateBlockFormat" name="Validate state block fields"/>
+    <task id="Task_ValidateWork" name="Validate PoW against previous / pubkey"/>
+    <task id="Task_ValidateSignature" name="Validate Ed25519-blake2b signature"/>
+    <task id="Task_CheckAccountState" name="Check balance, previous, link"/>
+    <task id="Task_ORVConsensus" name="Open Representative Voting consensus"/>
+    <task id="Task_LedgerConfirmed" name="Confirm block"/>
+    <endEvent id="End_LedgerBlock" name="Confirmed on-chain"/>
+    <sequenceFlow id="L1" sourceRef="Start_LedgerBlock" targetRef="Task_ValidateBlockFormat"/>
+    <sequenceFlow id="L2" sourceRef="Task_ValidateBlockFormat" targetRef="Task_ValidateWork"/>
+    <sequenceFlow id="L3" sourceRef="Task_ValidateWork" targetRef="Task_ValidateSignature"/>
+    <sequenceFlow id="L4" sourceRef="Task_ValidateSignature" targetRef="Task_CheckAccountState"/>
+    <sequenceFlow id="L5" sourceRef="Task_CheckAccountState" targetRef="Task_ORVConsensus"/>
+    <sequenceFlow id="L6" sourceRef="Task_ORVConsensus" targetRef="Task_LedgerConfirmed"/>
+    <sequenceFlow id="L7" sourceRef="Task_LedgerConfirmed" targetRef="End_LedgerBlock"/>
   </process>
-
-  <!-- ============================================================ -->
-  <!-- Indexer Network Process                                      -->
-  <!-- ============================================================ -->
   <process id="Process_Indexer" isExecutable="false">
     <laneSet id="LaneSet_Indexer">
-      <lane id="Lane_IndexerA" name="Indexer A">
+      <lane id="Lane_IndexerCore" name="Indexer Core">
         <flowNodeRef>Start_IndexerScan</flowNodeRef>
-        <flowNodeRef>Task_QueryBlocksA</flowNodeRef>
-        <flowNodeRef>Task_ValidatePairA</flowNodeRef>
-        <flowNodeRef>Gateway_ValidPairA</flowNodeRef>
-        <flowNodeRef>Task_ComputeLeafA</flowNodeRef>
-        <flowNodeRef>Task_InsertTreeA</flowNodeRef>
-        <flowNodeRef>Task_ComputeRootA</flowNodeRef>
-        <flowNodeRef>Task_CompareRootsA</flowNodeRef>
-        <flowNodeRef>Task_PublishRoot</flowNodeRef>
+        <flowNodeRef>Task_QueryConfirmedBlocks</flowNodeRef>
+        <flowNodeRef>Task_FilterSendsToPool</flowNodeRef>
+        <flowNodeRef>Task_IndexerBlocksInfo</flowNodeRef>
+        <flowNodeRef>Task_ValidatePair</flowNodeRef>
+        <flowNodeRef>Gateway_PairValid</flowNodeRef>
+        <flowNodeRef>Task_ComputeEpoch</flowNodeRef>
+        <flowNodeRef>Task_ComputeLeaf</flowNodeRef>
+        <flowNodeRef>Task_InsertTree</flowNodeRef>
+        <flowNodeRef>Task_ComputeRoot</flowNodeRef>
+        <flowNodeRef>Task_PersistIndexerState</flowNodeRef>
+        <flowNodeRef>Task_PublishRootAPI</flowNodeRef>
+        <flowNodeRef>Start_IndexerDeposit</flowNodeRef>
+        <flowNodeRef>Task_IndexerDepositVerify</flowNodeRef>
+        <flowNodeRef>Gateway_DepositKnown</flowNodeRef>
+        <flowNodeRef>Task_IndexerDepositAdd</flowNodeRef>
+        <flowNodeRef>Start_IndexerProve</flowNodeRef>
+        <flowNodeRef>Task_FetchMerkleProof</flowNodeRef>
+        <flowNodeRef>Task_GenerateProofInputs</flowNodeRef>
         <flowNodeRef>Task_ServeProof</flowNodeRef>
-        <flowNodeRef>End_IndexerAccepted</flowNodeRef>
-        <flowNodeRef>End_IndexerRejected</flowNodeRef>
+        <flowNodeRef>End_IndexerOK</flowNodeRef>
+        <flowNodeRef>End_IndexerReject</flowNodeRef>
       </lane>
     </laneSet>
-
-    <startEvent id="Start_IndexerScan" name="New confirmed blocks"/>
-    <task id="Task_QueryBlocksA" name="Query blocks_info for deposit/commitment pair"/>
-    <task id="Task_ValidatePairA" name="Validate deposit → pool and commitment link"/>
-    <exclusiveGateway id="Gateway_ValidPairA" name="Valid pair?"/>
-    <task id="Task_ComputeLeafA" name="Compute leaf = Poseidon(C, 0)"/>
-    <task id="Task_InsertTreeA" name="Insert leaf into epoch Merkle tree"/>
-    <task id="Task_ComputeRootA" name="Compute Merkle root deterministically"/>
-    <task id="Task_CompareRootsA" name="Compare root with other indexers"/>
-    <exclusiveGateway id="Gateway_RootAgree" name="Majority agree?"/>
-    <task id="Task_PublishRoot" name="Publish root via API and optionally on-chain"/>
-    <task id="Task_ServeProof" name="Serve inclusion proof for C"/>
-    <endEvent id="End_IndexerAccepted" name="Root accepted"/>
-    <endEvent id="End_IndexerRejected" name="Invalid pair / divergent root"/>
-
-    <sequenceFlow id="I1" sourceRef="Start_IndexerScan" targetRef="Task_QueryBlocksA"/>
-    <sequenceFlow id="I2" sourceRef="Task_QueryBlocksA" targetRef="Task_ValidatePairA"/>
-    <sequenceFlow id="I3" sourceRef="Task_ValidatePairA" targetRef="Gateway_ValidPairA"/>
-    <sequenceFlow id="I4_No" sourceRef="Gateway_ValidPairA" targetRef="End_IndexerRejected" name="No"/>
-    <sequenceFlow id="I4_Yes" sourceRef="Gateway_ValidPairA" targetRef="Task_ComputeLeafA" name="Yes"/>
-    <sequenceFlow id="I5" sourceRef="Task_ComputeLeafA" targetRef="Task_InsertTreeA"/>
-    <sequenceFlow id="I6" sourceRef="Task_InsertTreeA" targetRef="Task_ComputeRootA"/>
-    <sequenceFlow id="I7" sourceRef="Task_ComputeRootA" targetRef="Task_CompareRootsA"/>
-    <sequenceFlow id="I8" sourceRef="Task_CompareRootsA" targetRef="Gateway_RootAgree"/>
-    <sequenceFlow id="I9_No" sourceRef="Gateway_RootAgree" targetRef="End_IndexerRejected" name="No"/>
-    <sequenceFlow id="I9_Yes" sourceRef="Gateway_RootAgree" targetRef="Task_PublishRoot" name="Yes"/>
-    <sequenceFlow id="I10" sourceRef="Task_PublishRoot" targetRef="Task_ServeProof"/>
-    <sequenceFlow id="I11" sourceRef="Task_ServeProof" targetRef="End_IndexerAccepted"/>
+    <startEvent id="Start_IndexerScan" name="Confirmed blocks available"/>
+    <task id="Task_QueryConfirmedBlocks" name="Query account_history for pool addresses"/>
+    <task id="Task_FilterSendsToPool" name="Filter sends matching allowed denominations"/>
+    <task id="Task_IndexerBlocksInfo" name="blocks_info(deposit_hash, commit_hash)"/>
+    <task id="Task_ValidatePair" name="Validate: same source, amount in DENOMINATIONS, link == pool_pubkey, commitment link 32 bytes"/>
+    <exclusiveGateway id="Gateway_PairValid" name="Valid pair?"/>
+    <task id="Task_ComputeEpoch" name="Compute epoch = local_timestamp // 86400"/>
+    <task id="Task_ComputeLeaf" name="leaf = Poseidon(C, 0)"/>
+    <task id="Task_InsertTree" name="Insert into per-epoch/denom Merkle tree (depth 20)"/>
+    <task id="Task_ComputeRoot" name="Compute deterministic root"/>
+    <task id="Task_PersistIndexerState" name="Persist commitments to indexer_state.json"/>
+    <task id="Task_PublishRootAPI" name="Expose /root/{epoch}/{denom} and /status"/>
+    <endEvent id="End_IndexerScanOK" name="Root updated"/>
+    <endEvent id="End_IndexerScanReject" name="Invalid pair ignored"/>
+    <sequenceFlow id="IS1" sourceRef="Start_IndexerScan" targetRef="Task_QueryConfirmedBlocks"/>
+    <sequenceFlow id="IS2" sourceRef="Task_QueryConfirmedBlocks" targetRef="Task_FilterSendsToPool"/>
+    <sequenceFlow id="IS3" sourceRef="Task_FilterSendsToPool" targetRef="Task_IndexerBlocksInfo"/>
+    <sequenceFlow id="IS4" sourceRef="Task_IndexerBlocksInfo" targetRef="Task_ValidatePair"/>
+    <sequenceFlow id="IS5" sourceRef="Task_ValidatePair" targetRef="Gateway_PairValid"/>
+    <sequenceFlow id="IS6_No" sourceRef="Gateway_PairValid" targetRef="End_IndexerScanReject" name="No"/>
+    <sequenceFlow id="IS6_Yes" sourceRef="Gateway_PairValid" targetRef="Task_ComputeEpoch" name="Yes"/>
+    <sequenceFlow id="IS7" sourceRef="Task_ComputeEpoch" targetRef="Task_ComputeLeaf"/>
+    <sequenceFlow id="IS8" sourceRef="Task_ComputeLeaf" targetRef="Task_InsertTree"/>
+    <sequenceFlow id="IS9" sourceRef="Task_InsertTree" targetRef="Task_ComputeRoot"/>
+    <sequenceFlow id="IS10" sourceRef="Task_ComputeRoot" targetRef="Task_PersistIndexerState"/>
+    <sequenceFlow id="IS11" sourceRef="Task_PersistIndexerState" targetRef="Task_PublishRootAPI"/>
+    <sequenceFlow id="IS12" sourceRef="Task_PublishRootAPI" targetRef="End_IndexerScanOK"/>
+    <startEvent id="Start_IndexerDeposit" name="POST /api/deposit"/>
+    <task id="Task_IndexerDepositVerify" name="verify_deposit_commitment_pair()"/>
+    <exclusiveGateway id="Gateway_DepositKnown" name="Pair valid?"/>
+    <task id="Task_IndexerDepositAdd" name="add_commitment(epoch, denom, C)"/>
+    <endEvent id="End_IndexerDepositOK" name="Return {ok, commitment, epoch}"/>
+    <endEvent id="End_IndexerDepositReject" name="Return 400 invalid pair"/>
+    <sequenceFlow id="ID1" sourceRef="Start_IndexerDeposit" targetRef="Task_IndexerDepositVerify"/>
+    <sequenceFlow id="ID2" sourceRef="Task_IndexerDepositVerify" targetRef="Gateway_DepositKnown"/>
+    <sequenceFlow id="ID3_No" sourceRef="Gateway_DepositKnown" targetRef="End_IndexerDepositReject" name="No"/>
+    <sequenceFlow id="ID3_Yes" sourceRef="Gateway_DepositKnown" targetRef="Task_IndexerDepositAdd" name="Yes"/>
+    <sequenceFlow id="ID4" sourceRef="Task_IndexerDepositAdd" targetRef="End_IndexerDepositOK"/>
+    <startEvent id="Start_IndexerProve" name="POST /api/prove"/>
+    <task id="Task_FetchMerkleProof" name="get_proof(epoch, denom, C)"/>
+    <task id="Task_GenerateProofInputs" name="Build snarkjs input signals (root, nullifier, limbs, path, indices)"/>
+    <task id="Task_ServeProof" name="Run snarkjs groth16.fullProve; return proof + publicSignals"/>
+    <endEvent id="End_IndexerProveOK" name="Return proof"/>
+    <sequenceFlow id="IP1" sourceRef="Start_IndexerProve" targetRef="Task_FetchMerkleProof"/>
+    <sequenceFlow id="IP2" sourceRef="Task_FetchMerkleProof" targetRef="Task_GenerateProofInputs"/>
+    <sequenceFlow id="IP3" sourceRef="Task_GenerateProofInputs" targetRef="Task_ServeProof"/>
+    <sequenceFlow id="IP4" sourceRef="Task_ServeProof" targetRef="End_IndexerProveOK"/>
+    <endEvent id="End_IndexerOK" name="OK"/>
+    <endEvent id="End_IndexerReject" name="Reject"/>
   </process>
-
-  <!-- ============================================================ -->
-  <!-- Guardian Network Process                                     -->
-  <!-- ============================================================ -->
   <process id="Process_Guardian" isExecutable="false">
     <laneSet id="LaneSet_Guardian">
-      <lane id="Lane_GuardianShare" name="Each Guardian (FROST share)">
-        <flowNodeRef>Start_PartialSigRequest</flowNodeRef>
-        <flowNodeRef>Task_VerifyZKProof</flowNodeRef>
-        <flowNodeRef>Gateway_ProofValid</flowNodeRef>
+      <lane id="Lane_GuardianNode" name="Guardian (single-key prototype)">
+        <flowNodeRef>Start_GuardianWithdraw</flowNodeRef>
+        <flowNodeRef>Task_ParseRequest</flowNodeRef>
+        <flowNodeRef>Task_VerifyPublicSignals</flowNodeRef>
+        <flowNodeRef>Gateway_PublicSignalsOK</flowNodeRef>
+        <flowNodeRef>Task_FetchIndexerRoot</flowNodeRef>
+        <flowNodeRef>Gateway_RootMatches</flowNodeRef>
         <flowNodeRef>Task_CheckNullifier</flowNodeRef>
         <flowNodeRef>Gateway_NullifierFresh</flowNodeRef>
-        <flowNodeRef>Task_ComputePartialSig</flowNodeRef>
-        <flowNodeRef>Task_ReturnPartialSig</flowNodeRef>
-        <flowNodeRef>Task_RejectInvalid</flowNodeRef>
-        <flowNodeRef>End_PartialSigSent</flowNodeRef>
-        <flowNodeRef>End_RequestRejected</flowNodeRef>
+        <flowNodeRef>Task_GuardianAccountInfo</flowNodeRef>
+        <flowNodeRef>Task_ComputeNewBalance</flowNodeRef>
+        <flowNodeRef>Task_HashBlock</flowNodeRef>
+        <flowNodeRef>Task_SignBlock</flowNodeRef>
+        <flowNodeRef>Task_MarkNullifier</flowNodeRef>
+        <flowNodeRef>Task_PersistGuardianState</flowNodeRef>
+        <flowNodeRef>Task_ReturnBlock</flowNodeRef>
+        <flowNodeRef>Task_RejectRequest</flowNodeRef>
+        <flowNodeRef>End_GuardianSigned</flowNodeRef>
+        <flowNodeRef>End_GuardianRejected</flowNodeRef>
+        <flowNodeRef>Task_VerifyZKProof</flowNodeRef>
+        <flowNodeRef>Gateway_ProofValid</flowNodeRef>
       </lane>
     </laneSet>
-
-    <startEvent id="Start_PartialSigRequest" name="Withdrawal request received"/>
-    <task id="Task_VerifyZKProof" name="Verify Groth16 proof against accepted root"/>
+    <startEvent id="Start_GuardianWithdraw" name="POST /withdraw"/>
+    <task id="Task_ParseRequest" name="Parse epoch, denom, P_w, nullifier, proof, publicSignals"/>
+    <task id="Task_VerifyPublicSignals" name="Check publicSignals[1]==nullifier, [2,3]==P_w limbs"/>
+    <exclusiveGateway id="Gateway_PublicSignalsOK" name="Signals match?"/>
+    <task id="Task_FetchIndexerRoot" name="GET /root/{epoch}/{denom} from indexer"/>
+    <exclusiveGateway id="Gateway_RootMatches" name="Root matches?"/>
+    <task id="Task_CheckNullifier" name="Check nullifier not in spent set"/>
+    <exclusiveGateway id="Gateway_NullifierFresh" name="Fresh?"/>
+    <task id="Task_VerifyZKProof" name="snarkjs verify(proof, publicSignals)"/>
     <exclusiveGateway id="Gateway_ProofValid" name="Proof valid?"/>
-    <task id="Task_CheckNullifier" name="Check nullifier not already spent"/>
-    <exclusiveGateway id="Gateway_NullifierFresh" name="Nullifier fresh?"/>
-    <task id="Task_ComputePartialSig" name="Compute FROST partial signature"/>
-    <task id="Task_ReturnPartialSig" name="Return partial signature to coordinator"/>
-    <task id="Task_RejectInvalid" name="Return rejection"/>
-    <endEvent id="End_PartialSigSent" name="Partial signature contributed"/>
-    <endEvent id="End_RequestRejected" name="Request rejected"/>
-
-    <sequenceFlow id="G1" sourceRef="Start_PartialSigRequest" targetRef="Task_VerifyZKProof"/>
-    <sequenceFlow id="G2" sourceRef="Task_VerifyZKProof" targetRef="Gateway_ProofValid"/>
-    <sequenceFlow id="G3_No" sourceRef="Gateway_ProofValid" targetRef="Task_RejectInvalid" name="No"/>
-    <sequenceFlow id="G3_Yes" sourceRef="Gateway_ProofValid" targetRef="Task_CheckNullifier" name="Yes"/>
-    <sequenceFlow id="G4" sourceRef="Task_CheckNullifier" targetRef="Gateway_NullifierFresh"/>
-    <sequenceFlow id="G5_No" sourceRef="Gateway_NullifierFresh" targetRef="Task_RejectInvalid" name="No"/>
-    <sequenceFlow id="G5_Yes" sourceRef="Gateway_NullifierFresh" targetRef="Task_ComputePartialSig" name="Yes"/>
-    <sequenceFlow id="G6" sourceRef="Task_ComputePartialSig" targetRef="Task_ReturnPartialSig"/>
-    <sequenceFlow id="G7" sourceRef="Task_ReturnPartialSig" targetRef="End_PartialSigSent"/>
-    <sequenceFlow id="G8" sourceRef="Task_RejectInvalid" targetRef="End_RequestRejected"/>
+    <task id="Task_GuardianAccountInfo" name="Get pool account_info (frontier, balance, rep)"/>
+    <task id="Task_ComputeNewBalance" name="new_balance = balance - (denom - 0.01 XNO fee)"/>
+    <task id="Task_HashBlock" name="block_hash = Blake2b(32-byte preamble|account|previous|rep|balance|link=P_w)"/>
+    <task id="Task_SignBlock" name="Sign block_hash with pool Ed25519-blake2b key"/>
+    <task id="Task_MarkNullifier" name="Add nullifier to spent set"/>
+    <task id="Task_PersistGuardianState" name="Persist guardian_state.json"/>
+    <task id="Task_ReturnBlock" name="Return {block, block_hash, nullifier}"/>
+    <task id="Task_RejectRequest" name="Return {error: verification failed}"/>
+    <endEvent id="End_GuardianSigned" name="Signed block returned"/>
+    <endEvent id="End_GuardianRejected" name="Request rejected"/>
+    <sequenceFlow id="GU1" sourceRef="Start_GuardianWithdraw" targetRef="Task_ParseRequest"/>
+    <sequenceFlow id="GU2" sourceRef="Task_ParseRequest" targetRef="Task_VerifyPublicSignals"/>
+    <sequenceFlow id="GU3" sourceRef="Task_VerifyPublicSignals" targetRef="Gateway_PublicSignalsOK"/>
+    <sequenceFlow id="GU4_No" sourceRef="Gateway_PublicSignalsOK" targetRef="Task_RejectRequest" name="No"/>
+    <sequenceFlow id="GU4_Yes" sourceRef="Gateway_PublicSignalsOK" targetRef="Task_FetchIndexerRoot" name="Yes"/>
+    <sequenceFlow id="GU5" sourceRef="Task_FetchIndexerRoot" targetRef="Gateway_RootMatches"/>
+    <sequenceFlow id="GU6_No" sourceRef="Gateway_RootMatches" targetRef="Task_RejectRequest" name="No"/>
+    <sequenceFlow id="GU6_Yes" sourceRef="Gateway_RootMatches" targetRef="Task_CheckNullifier" name="Yes"/>
+    <sequenceFlow id="GU7" sourceRef="Task_CheckNullifier" targetRef="Gateway_NullifierFresh"/>
+    <sequenceFlow id="GU8_No" sourceRef="Gateway_NullifierFresh" targetRef="Task_RejectRequest" name="No"/>
+    <sequenceFlow id="GU8_Yes" sourceRef="Gateway_NullifierFresh" targetRef="Task_VerifyZKProof" name="Yes"/>
+    <sequenceFlow id="GU9" sourceRef="Task_VerifyZKProof" targetRef="Gateway_ProofValid"/>
+    <sequenceFlow id="GU10_No" sourceRef="Gateway_ProofValid" targetRef="Task_RejectRequest" name="No"/>
+    <sequenceFlow id="GU10_Yes" sourceRef="Gateway_ProofValid" targetRef="Task_GuardianAccountInfo" name="Yes"/>
+    <sequenceFlow id="GU11" sourceRef="Task_GuardianAccountInfo" targetRef="Task_ComputeNewBalance"/>
+    <sequenceFlow id="GU12" sourceRef="Task_ComputeNewBalance" targetRef="Task_HashBlock"/>
+    <sequenceFlow id="GU13" sourceRef="Task_HashBlock" targetRef="Task_SignBlock"/>
+    <sequenceFlow id="GU14" sourceRef="Task_SignBlock" targetRef="Task_MarkNullifier"/>
+    <sequenceFlow id="GU15" sourceRef="Task_MarkNullifier" targetRef="Task_PersistGuardianState"/>
+    <sequenceFlow id="GU16" sourceRef="Task_PersistGuardianState" targetRef="Task_ReturnBlock"/>
+    <sequenceFlow id="GU17" sourceRef="Task_ReturnBlock" targetRef="End_GuardianSigned"/>
+    <sequenceFlow id="GU18" sourceRef="Task_RejectRequest" targetRef="End_GuardianRejected"/>
   </process>
-
-  <!-- ============================================================ -->
-  <!-- Withdrawer / Coordinator Process                             -->
-  <!-- ============================================================ -->
-  <process id="Process_Coordinator" isExecutable="false">
-    <startEvent id="Start_Withdraw" name="User wants to withdraw"/>
-    <task id="Task_FetchRoot" name="Fetch accepted Merkle root from indexers"/>
-    <task id="Task_FetchProof" name="Fetch inclusion proof for commitment C"/>
-    <task id="Task_GenerateZKProof" name="Generate Groth16 ZK proof"/>
-    <task id="Task_BuildWithdrawalBlock" name="Build unsigned withdrawal block Pool → P_w"/>
-    <task id="Task_RequestPartialSig" name="Request partial signatures from ≥t guardians"/>
-    <task id="Task_CollectPartialSigs" name="Collect t valid partial signatures"/>
-    <task id="Task_AggregateSignature" name="Aggregate partial signatures into full Ed25519-blake2b signature"/>
-    <task id="Task_AttachSignature" name="Attach signature to withdrawal block"/>
-    <task id="Task_BroadcastWithdrawal" name="Compute PoW and broadcast withdrawal block"/>
-    <endEvent id="End_WithdrawDone" name="Withdrawal broadcast"/>
-
-    <sequenceFlow id="C1" sourceRef="Start_Withdraw" targetRef="Task_FetchRoot"/>
-    <sequenceFlow id="C2" sourceRef="Task_FetchRoot" targetRef="Task_FetchProof"/>
-    <sequenceFlow id="C3" sourceRef="Task_FetchProof" targetRef="Task_GenerateZKProof"/>
-    <sequenceFlow id="C4" sourceRef="Task_GenerateZKProof" targetRef="Task_BuildWithdrawalBlock"/>
-    <sequenceFlow id="C5" sourceRef="Task_BuildWithdrawalBlock" targetRef="Task_RequestPartialSig"/>
-    <sequenceFlow id="C6" sourceRef="Task_RequestPartialSig" targetRef="Task_CollectPartialSigs"/>
-    <sequenceFlow id="C7" sourceRef="Task_CollectPartialSigs" targetRef="Task_AggregateSignature"/>
-    <sequenceFlow id="C8" sourceRef="Task_AggregateSignature" targetRef="Task_AttachSignature"/>
-    <sequenceFlow id="C9" sourceRef="Task_AttachSignature" targetRef="Task_BroadcastWithdrawal"/>
-    <sequenceFlow id="C10" sourceRef="Task_BroadcastWithdrawal" targetRef="End_WithdrawDone"/>
-  </process>
-
-  <!-- ============================================================ -->
-  <!-- Diagram Layout (simplified)                                  -->
-  <!-- ============================================================ -->
-  <bpmndi:BPMNDiagram id="BPMNDiagram_1" name="VELA v2 Threshold Architecture">
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1" name="VELA v2 Full Architecture">
     <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Collaboration_1">
-
-      <bpmndi:BPMNShape id="Participant_Depositor_di" bpmnElement="Participant_Depositor" isHorizontal="true">
-        <omgdc:Bounds x="100" y="80" width="1500" height="180"/>
+      <bpmndi:BPMNShape id="Participant_Client_di" bpmnElement="Participant_Client" isHorizontal="true">
+        <omgdc:Bounds x="80" y="80" width="1700" height="260"/>
       </bpmndi:BPMNShape>
-
-      <bpmndi:BPMNShape id="Participant_Ledger_di" bpmnElement="Participant_Ledger" isHorizontal="true">
-        <omgdc:Bounds x="100" y="300" width="1500" height="180"/>
+      <bpmndi:BPMNShape id="Participant_WebApp_di" bpmnElement="Participant_WebApp" isHorizontal="true">
+        <omgdc:Bounds x="80" y="360" width="1700" height="300"/>
       </bpmndi:BPMNShape>
-
+      <bpmndi:BPMNShape id="Participant_NanoRPC_di" bpmnElement="Participant_NanoRPC" isHorizontal="true">
+        <omgdc:Bounds x="80" y="680" width="1700" height="240"/>
+      </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="Participant_Indexer_di" bpmnElement="Participant_Indexer" isHorizontal="true">
-        <omgdc:Bounds x="100" y="520" width="1500" height="220"/>
+        <omgdc:Bounds x="80" y="940" width="1700" height="320"/>
       </bpmndi:BPMNShape>
-
       <bpmndi:BPMNShape id="Participant_Guardian_di" bpmnElement="Participant_Guardian" isHorizontal="true">
-        <omgdc:Bounds x="100" y="780" width="1500" height="220"/>
+        <omgdc:Bounds x="80" y="1280" width="1700" height="300"/>
       </bpmndi:BPMNShape>
-
-      <bpmndi:BPMNShape id="Participant_Coordinator_di" bpmnElement="Participant_Coordinator" isHorizontal="true">
-        <omgdc:Bounds x="100" y="1040" width="1500" height="220"/>
+      <bpmndi:BPMNShape id="Participant_Ledger_di" bpmnElement="Participant_Ledger" isHorizontal="true">
+        <omgdc:Bounds x="80" y="1620" width="1700" height="240"/>
       </bpmndi:BPMNShape>
-
+      <bpmndi:BPMNShape id="Start_Client_di" bpmnElement="Start_Client">
+        <omgdc:Bounds x="160" y="140" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_LoadWallets_di" bpmnElement="Task_LoadWallets">
+        <omgdc:Bounds x="340" y="140" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ExternalFund_di" bpmnElement="Task_ExternalFund">
+        <omgdc:Bounds x="520" y="140" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ReceiveFunding_di" bpmnElement="Task_ReceiveFunding">
+        <omgdc:Bounds x="700" y="140" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_HasBalance_di" bpmnElement="Gateway_HasBalance">
+        <omgdc:Bounds x="880" y="140" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="SubProcess_Deposit_di" bpmnElement="SubProcess_Deposit">
+        <omgdc:Bounds x="1060" y="140" width="320" height="140"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_SubDeposit_di" bpmnElement="Start_SubDeposit">
+        <omgdc:Bounds x="1240" y="140" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_DeriveStealth_di" bpmnElement="Task_DeriveStealth">
+        <omgdc:Bounds x="160" y="250" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_GenerateSecrets_di" bpmnElement="Task_GenerateSecrets">
+        <omgdc:Bounds x="340" y="250" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_FetchPoolInfo_di" bpmnElement="Task_FetchPoolInfo">
+        <omgdc:Bounds x="520" y="250" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ComputeCommitment_di" bpmnElement="Task_ComputeCommitment">
+        <omgdc:Bounds x="700" y="250" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_CreateDepositBlock_di" bpmnElement="Task_CreateDepositBlock">
+        <omgdc:Bounds x="880" y="250" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ComputeDepositWork_di" bpmnElement="Task_ComputeDepositWork">
+        <omgdc:Bounds x="1060" y="250" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_BroadcastDeposit_di" bpmnElement="Task_BroadcastDeposit">
+        <omgdc:Bounds x="1240" y="250" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_CreateCommitmentBlock_di" bpmnElement="Task_CreateCommitmentBlock">
+        <omgdc:Bounds x="160" y="360" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ComputeCommitmentWork_di" bpmnElement="Task_ComputeCommitmentWork">
+        <omgdc:Bounds x="340" y="360" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_BroadcastCommitment_di" bpmnElement="Task_BroadcastCommitment">
+        <omgdc:Bounds x="520" y="360" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_SubDeposit_di" bpmnElement="End_SubDeposit">
+        <omgdc:Bounds x="700" y="360" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="SubProcess_Withdraw_di" bpmnElement="SubProcess_Withdraw">
+        <omgdc:Bounds x="880" y="360" width="320" height="140"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_SubWithdraw_di" bpmnElement="Start_SubWithdraw">
+        <omgdc:Bounds x="1060" y="360" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_RecoverHashes_di" bpmnElement="Task_RecoverHashes">
+        <omgdc:Bounds x="1240" y="360" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ClientSubmitDeposit_di" bpmnElement="Task_ClientSubmitDeposit">
+        <omgdc:Bounds x="160" y="470" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ClientRequestProof_di" bpmnElement="Task_ClientRequestProof">
+        <omgdc:Bounds x="340" y="470" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_GenerateZKProof_di" bpmnElement="Task_GenerateZKProof">
+        <omgdc:Bounds x="520" y="470" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ClientRequestWithdraw_di" bpmnElement="Task_ClientRequestWithdraw">
+        <omgdc:Bounds x="700" y="470" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_InspectGuardianBlock_di" bpmnElement="Task_InspectGuardianBlock">
+        <omgdc:Bounds x="880" y="470" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ComputeWithdrawWork_di" bpmnElement="Task_ComputeWithdrawWork">
+        <omgdc:Bounds x="1060" y="470" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ClientBroadcast_di" bpmnElement="Task_ClientBroadcast">
+        <omgdc:Bounds x="1240" y="470" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_SubWithdraw_di" bpmnElement="End_SubWithdraw">
+        <omgdc:Bounds x="160" y="580" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ReceiveWithdrawal_di" bpmnElement="Task_ReceiveWithdrawal">
+        <omgdc:Bounds x="340" y="580" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_ClientDone_di" bpmnElement="End_ClientDone">
+        <omgdc:Bounds x="520" y="580" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_ClientFail_di" bpmnElement="End_ClientFail">
+        <omgdc:Bounds x="700" y="580" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ClientGetAccountInfo_di" bpmnElement="Task_ClientGetAccountInfo">
+        <omgdc:Bounds x="880" y="580" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ClientGetPending_di" bpmnElement="Task_ClientGetPending">
+        <omgdc:Bounds x="1060" y="580" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ClientGetWork_di" bpmnElement="Task_ClientGetWork">
+        <omgdc:Bounds x="1240" y="580" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_WebAccountInfo_di" bpmnElement="Start_WebAccountInfo">
+        <omgdc:Bounds x="160" y="420" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ValidateAccountInfo_di" bpmnElement="Task_ValidateAccountInfo">
+        <omgdc:Bounds x="340" y="420" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_WebPending_di" bpmnElement="Start_WebPending">
+        <omgdc:Bounds x="520" y="420" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ValidatePending_di" bpmnElement="Task_ValidatePending">
+        <omgdc:Bounds x="700" y="420" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_WebWork_di" bpmnElement="Start_WebWork">
+        <omgdc:Bounds x="880" y="420" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ValidateWork_di" bpmnElement="Task_ValidateWork">
+        <omgdc:Bounds x="1060" y="420" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_WebBroadcast_di" bpmnElement="Start_WebBroadcast">
+        <omgdc:Bounds x="1240" y="420" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ValidateBroadcast_di" bpmnElement="Task_ValidateBroadcast">
+        <omgdc:Bounds x="160" y="530" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_WebDeposit_di" bpmnElement="Start_WebDeposit">
+        <omgdc:Bounds x="340" y="530" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ValidateDepositReq_di" bpmnElement="Task_ValidateDepositReq">
+        <omgdc:Bounds x="520" y="530" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_WebProve_di" bpmnElement="Start_WebProve">
+        <omgdc:Bounds x="700" y="530" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ValidateProveReq_di" bpmnElement="Task_ValidateProveReq">
+        <omgdc:Bounds x="880" y="530" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_WebWithdraw_di" bpmnElement="Start_WebWithdraw">
+        <omgdc:Bounds x="1060" y="530" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ValidateWithdrawReq_di" bpmnElement="Task_ValidateWithdrawReq">
+        <omgdc:Bounds x="1240" y="530" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_WebCallNanoRPC_di" bpmnElement="Task_WebCallNanoRPC">
+        <omgdc:Bounds x="160" y="640" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_WebForwardDeposit_di" bpmnElement="Task_WebForwardDeposit">
+        <omgdc:Bounds x="340" y="640" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_WebForwardProve_di" bpmnElement="Task_WebForwardProve">
+        <omgdc:Bounds x="520" y="640" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_WebForwardWithdraw_di" bpmnElement="Task_WebForwardWithdraw">
+        <omgdc:Bounds x="700" y="640" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_WebReturnResponse_di" bpmnElement="Task_WebReturnResponse">
+        <omgdc:Bounds x="880" y="640" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_WebOK_di" bpmnElement="End_WebOK">
+        <omgdc:Bounds x="1060" y="640" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_WebError_di" bpmnElement="End_WebError">
+        <omgdc:Bounds x="1240" y="640" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_NanoRPC_di" bpmnElement="Start_NanoRPC">
+        <omgdc:Bounds x="160" y="740" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_AuthRequest_di" bpmnElement="Task_AuthRequest">
+        <omgdc:Bounds x="340" y="740" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_RPCAction_di" bpmnElement="Gateway_RPCAction">
+        <omgdc:Bounds x="520" y="740" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_RPCAccountInfo_di" bpmnElement="Task_RPCAccountInfo">
+        <omgdc:Bounds x="700" y="740" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_RPCPending_di" bpmnElement="Task_RPCPending">
+        <omgdc:Bounds x="880" y="740" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_RPCWorkGenerate_di" bpmnElement="Task_RPCWorkGenerate">
+        <omgdc:Bounds x="1060" y="740" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_RPCProcess_di" bpmnElement="Task_RPCProcess">
+        <omgdc:Bounds x="1240" y="740" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_RPCBlocksInfo_di" bpmnElement="Task_RPCBlocksInfo">
+        <omgdc:Bounds x="160" y="850" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_RPCReturn_di" bpmnElement="Task_RPCReturn">
+        <omgdc:Bounds x="340" y="850" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_NanoRPC_di" bpmnElement="End_NanoRPC">
+        <omgdc:Bounds x="520" y="850" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_NanoRPCBroadcast_di" bpmnElement="Task_NanoRPCBroadcast">
+        <omgdc:Bounds x="700" y="850" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_LedgerBlock_di" bpmnElement="Start_LedgerBlock">
+        <omgdc:Bounds x="160" y="1680" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ValidateBlockFormat_di" bpmnElement="Task_ValidateBlockFormat">
+        <omgdc:Bounds x="340" y="1680" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ValidateWork_di" bpmnElement="Task_ValidateWork">
+        <omgdc:Bounds x="520" y="1680" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ValidateSignature_di" bpmnElement="Task_ValidateSignature">
+        <omgdc:Bounds x="700" y="1680" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_CheckAccountState_di" bpmnElement="Task_CheckAccountState">
+        <omgdc:Bounds x="880" y="1680" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ORVConsensus_di" bpmnElement="Task_ORVConsensus">
+        <omgdc:Bounds x="1060" y="1680" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_LedgerConfirmed_di" bpmnElement="Task_LedgerConfirmed">
+        <omgdc:Bounds x="1240" y="1680" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_LedgerBlock_di" bpmnElement="End_LedgerBlock">
+        <omgdc:Bounds x="160" y="1790" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_IndexerScan_di" bpmnElement="Start_IndexerScan">
+        <omgdc:Bounds x="160" y="1000" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_QueryConfirmedBlocks_di" bpmnElement="Task_QueryConfirmedBlocks">
+        <omgdc:Bounds x="340" y="1000" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_FilterSendsToPool_di" bpmnElement="Task_FilterSendsToPool">
+        <omgdc:Bounds x="520" y="1000" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_IndexerBlocksInfo_di" bpmnElement="Task_IndexerBlocksInfo">
+        <omgdc:Bounds x="700" y="1000" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ValidatePair_di" bpmnElement="Task_ValidatePair">
+        <omgdc:Bounds x="880" y="1000" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_PairValid_di" bpmnElement="Gateway_PairValid">
+        <omgdc:Bounds x="1060" y="1000" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ComputeEpoch_di" bpmnElement="Task_ComputeEpoch">
+        <omgdc:Bounds x="1240" y="1000" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ComputeLeaf_di" bpmnElement="Task_ComputeLeaf">
+        <omgdc:Bounds x="160" y="1110" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_InsertTree_di" bpmnElement="Task_InsertTree">
+        <omgdc:Bounds x="340" y="1110" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ComputeRoot_di" bpmnElement="Task_ComputeRoot">
+        <omgdc:Bounds x="520" y="1110" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_PersistIndexerState_di" bpmnElement="Task_PersistIndexerState">
+        <omgdc:Bounds x="700" y="1110" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_PublishRootAPI_di" bpmnElement="Task_PublishRootAPI">
+        <omgdc:Bounds x="880" y="1110" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_IndexerScanOK_di" bpmnElement="End_IndexerScanOK">
+        <omgdc:Bounds x="1060" y="1110" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_IndexerScanReject_di" bpmnElement="End_IndexerScanReject">
+        <omgdc:Bounds x="1240" y="1110" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_IndexerDeposit_di" bpmnElement="Start_IndexerDeposit">
+        <omgdc:Bounds x="160" y="1220" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_IndexerDepositVerify_di" bpmnElement="Task_IndexerDepositVerify">
+        <omgdc:Bounds x="340" y="1220" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_DepositKnown_di" bpmnElement="Gateway_DepositKnown">
+        <omgdc:Bounds x="520" y="1220" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_IndexerDepositAdd_di" bpmnElement="Task_IndexerDepositAdd">
+        <omgdc:Bounds x="700" y="1220" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_IndexerDepositOK_di" bpmnElement="End_IndexerDepositOK">
+        <omgdc:Bounds x="880" y="1220" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_IndexerDepositReject_di" bpmnElement="End_IndexerDepositReject">
+        <omgdc:Bounds x="1060" y="1220" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_IndexerProve_di" bpmnElement="Start_IndexerProve">
+        <omgdc:Bounds x="1240" y="1220" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_FetchMerkleProof_di" bpmnElement="Task_FetchMerkleProof">
+        <omgdc:Bounds x="160" y="1330" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_GenerateProofInputs_di" bpmnElement="Task_GenerateProofInputs">
+        <omgdc:Bounds x="340" y="1330" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ServeProof_di" bpmnElement="Task_ServeProof">
+        <omgdc:Bounds x="520" y="1330" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_IndexerProveOK_di" bpmnElement="End_IndexerProveOK">
+        <omgdc:Bounds x="700" y="1330" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_IndexerOK_di" bpmnElement="End_IndexerOK">
+        <omgdc:Bounds x="880" y="1330" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_IndexerReject_di" bpmnElement="End_IndexerReject">
+        <omgdc:Bounds x="1060" y="1330" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_GuardianWithdraw_di" bpmnElement="Start_GuardianWithdraw">
+        <omgdc:Bounds x="160" y="1340" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ParseRequest_di" bpmnElement="Task_ParseRequest">
+        <omgdc:Bounds x="340" y="1340" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_VerifyPublicSignals_di" bpmnElement="Task_VerifyPublicSignals">
+        <omgdc:Bounds x="520" y="1340" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_PublicSignalsOK_di" bpmnElement="Gateway_PublicSignalsOK">
+        <omgdc:Bounds x="700" y="1340" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_FetchIndexerRoot_di" bpmnElement="Task_FetchIndexerRoot">
+        <omgdc:Bounds x="880" y="1340" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_RootMatches_di" bpmnElement="Gateway_RootMatches">
+        <omgdc:Bounds x="1060" y="1340" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_CheckNullifier_di" bpmnElement="Task_CheckNullifier">
+        <omgdc:Bounds x="1240" y="1340" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_NullifierFresh_di" bpmnElement="Gateway_NullifierFresh">
+        <omgdc:Bounds x="160" y="1450" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_VerifyZKProof_di" bpmnElement="Task_VerifyZKProof">
+        <omgdc:Bounds x="340" y="1450" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_ProofValid_di" bpmnElement="Gateway_ProofValid">
+        <omgdc:Bounds x="520" y="1450" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_GuardianAccountInfo_di" bpmnElement="Task_GuardianAccountInfo">
+        <omgdc:Bounds x="700" y="1450" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ComputeNewBalance_di" bpmnElement="Task_ComputeNewBalance">
+        <omgdc:Bounds x="880" y="1450" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_HashBlock_di" bpmnElement="Task_HashBlock">
+        <omgdc:Bounds x="1060" y="1450" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_SignBlock_di" bpmnElement="Task_SignBlock">
+        <omgdc:Bounds x="1240" y="1450" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_MarkNullifier_di" bpmnElement="Task_MarkNullifier">
+        <omgdc:Bounds x="160" y="1560" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_PersistGuardianState_di" bpmnElement="Task_PersistGuardianState">
+        <omgdc:Bounds x="340" y="1560" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ReturnBlock_di" bpmnElement="Task_ReturnBlock">
+        <omgdc:Bounds x="520" y="1560" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_RejectRequest_di" bpmnElement="Task_RejectRequest">
+        <omgdc:Bounds x="700" y="1560" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_GuardianSigned_di" bpmnElement="End_GuardianSigned">
+        <omgdc:Bounds x="880" y="1560" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_GuardianRejected_di" bpmnElement="End_GuardianRejected">
+        <omgdc:Bounds x="1060" y="1560" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="MF_ClientDeposit_di" bpmnElement="MF_ClientDeposit">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_ClientProve_di" bpmnElement="MF_ClientProve">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_ClientWithdraw_di" bpmnElement="MF_ClientWithdraw">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_ClientAccountInfo_di" bpmnElement="MF_ClientAccountInfo">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_ClientPending_di" bpmnElement="MF_ClientPending">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_ClientWork_di" bpmnElement="MF_ClientWork">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_ClientBroadcast_di" bpmnElement="MF_ClientBroadcast">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_WebToNanoRPC_di" bpmnElement="MF_WebToNanoRPC">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_WebToIndexerDeposit_di" bpmnElement="MF_WebToIndexerDeposit">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_WebToIndexerProve_di" bpmnElement="MF_WebToIndexerProve">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_WebToGuardian_di" bpmnElement="MF_WebToGuardian">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_IndexerToNanoRPC_di" bpmnElement="MF_IndexerToNanoRPC">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_GuardianToNanoRPC_di" bpmnElement="MF_GuardianToNanoRPC">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_NanoRPCToLedger_di" bpmnElement="MF_NanoRPCToLedger">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_LedgerToIndexer_di" bpmnElement="MF_LedgerToIndexer">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SD1_di" bpmnElement="SD1">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SD2_di" bpmnElement="SD2">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SD3_di" bpmnElement="SD3">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SD4_di" bpmnElement="SD4">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SD5_di" bpmnElement="SD5">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SD6_di" bpmnElement="SD6">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SD7_di" bpmnElement="SD7">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SD8_di" bpmnElement="SD8">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SD9_di" bpmnElement="SD9">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SD10_di" bpmnElement="SD10">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SD11_di" bpmnElement="SD11">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SW1_di" bpmnElement="SW1">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SW2_di" bpmnElement="SW2">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SW3_di" bpmnElement="SW3">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SW4_di" bpmnElement="SW4">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SW5_di" bpmnElement="SW5">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SW6_di" bpmnElement="SW6">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SW7_di" bpmnElement="SW7">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SW8_di" bpmnElement="SW8">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SW9_di" bpmnElement="SW9">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="C0_di" bpmnElement="C0">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="C2_di" bpmnElement="C2">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="C3_di" bpmnElement="C3">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="C4_Yes_di" bpmnElement="C4_Yes">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="C4_No_di" bpmnElement="C4_No">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="C5_di" bpmnElement="C5">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="C6_di" bpmnElement="C6">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="C7_di" bpmnElement="C7">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_1000_di" bpmnElement="Flow_1000">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_1001_di" bpmnElement="Flow_1001">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_1002_di" bpmnElement="Flow_1002">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_1003_di" bpmnElement="Flow_1003">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="WA1_di" bpmnElement="WA1">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="WA2_di" bpmnElement="WA2">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="WP1_di" bpmnElement="WP1">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="WP2_di" bpmnElement="WP2">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="WW1_di" bpmnElement="WW1">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="WW2_di" bpmnElement="WW2">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="WB1_di" bpmnElement="WB1">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="WB2_di" bpmnElement="WB2">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="WD1_di" bpmnElement="WD1">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="WD2_di" bpmnElement="WD2">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="WPr1_di" bpmnElement="WPr1">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="WPr2_di" bpmnElement="WPr2">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="WWi1_di" bpmnElement="WWi1">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="WWi2_di" bpmnElement="WWi2">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="W1_di" bpmnElement="W1">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="W2_di" bpmnElement="W2">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="W3_di" bpmnElement="W3">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="W4_di" bpmnElement="W4">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="W5_di" bpmnElement="W5">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="NR1_di" bpmnElement="NR1">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="NR2_di" bpmnElement="NR2">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="NR3_Account_di" bpmnElement="NR3_Account">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="NR3_Pending_di" bpmnElement="NR3_Pending">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="NR3_Work_di" bpmnElement="NR3_Work">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="NR3_Process_di" bpmnElement="NR3_Process">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="NR3_Blocks_di" bpmnElement="NR3_Blocks">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="NR4_Account_di" bpmnElement="NR4_Account">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="NR4_Pending_di" bpmnElement="NR4_Pending">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="NR4_Work_di" bpmnElement="NR4_Work">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="NR4_Process_di" bpmnElement="NR4_Process">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="NR4_Blocks_di" bpmnElement="NR4_Blocks">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="NR5_di" bpmnElement="NR5">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="NR6_di" bpmnElement="NR6">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="L1_di" bpmnElement="L1">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="L2_di" bpmnElement="L2">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="L3_di" bpmnElement="L3">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="L4_di" bpmnElement="L4">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="L5_di" bpmnElement="L5">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="L6_di" bpmnElement="L6">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="L7_di" bpmnElement="L7">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IS1_di" bpmnElement="IS1">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IS2_di" bpmnElement="IS2">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IS3_di" bpmnElement="IS3">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IS4_di" bpmnElement="IS4">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IS5_di" bpmnElement="IS5">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IS6_No_di" bpmnElement="IS6_No">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IS6_Yes_di" bpmnElement="IS6_Yes">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IS7_di" bpmnElement="IS7">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IS8_di" bpmnElement="IS8">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IS9_di" bpmnElement="IS9">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IS10_di" bpmnElement="IS10">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IS11_di" bpmnElement="IS11">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IS12_di" bpmnElement="IS12">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="ID1_di" bpmnElement="ID1">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="ID2_di" bpmnElement="ID2">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="ID3_No_di" bpmnElement="ID3_No">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="ID3_Yes_di" bpmnElement="ID3_Yes">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="ID4_di" bpmnElement="ID4">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IP1_di" bpmnElement="IP1">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IP2_di" bpmnElement="IP2">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IP3_di" bpmnElement="IP3">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IP4_di" bpmnElement="IP4">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU1_di" bpmnElement="GU1">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU2_di" bpmnElement="GU2">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU3_di" bpmnElement="GU3">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU4_No_di" bpmnElement="GU4_No">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU4_Yes_di" bpmnElement="GU4_Yes">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU5_di" bpmnElement="GU5">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU6_No_di" bpmnElement="GU6_No">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU6_Yes_di" bpmnElement="GU6_Yes">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU7_di" bpmnElement="GU7">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU8_No_di" bpmnElement="GU8_No">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU8_Yes_di" bpmnElement="GU8_Yes">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU9_di" bpmnElement="GU9">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU10_No_di" bpmnElement="GU10_No">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU10_Yes_di" bpmnElement="GU10_Yes">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU11_di" bpmnElement="GU11">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU12_di" bpmnElement="GU12">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU13_di" bpmnElement="GU13">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU14_di" bpmnElement="GU14">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU15_di" bpmnElement="GU15">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU16_di" bpmnElement="GU16">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU17_di" bpmnElement="GU17">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU18_di" bpmnElement="GU18">
+        <omgdi:waypoint x="200" y="200"/>
+        <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
     </bpmndi:BPMNPlane>
   </bpmndi:BPMNDiagram>
 </definitions>

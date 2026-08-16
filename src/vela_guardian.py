@@ -27,7 +27,7 @@ from .snarkjs_bridge import verify_proof
 from .nano_rpc import NanoRPC
 
 EPOCH_SECONDS = 86400
-WITHDRAW_FEE_RAW = int(0.01 * 10**30)
+WITHDRAW_FEE_RAW = 10**28  # 0.01 XNO
 
 
 class VelaGuardian:
@@ -129,6 +129,7 @@ class VelaGuardian:
 
     def withdraw(self, req: dict) -> dict:
         verified = self.verify_withdrawal_request(req)
+        print("withdraw verify result:", verified)
         if verified is None:
             return {"error": "verification failed"}
 

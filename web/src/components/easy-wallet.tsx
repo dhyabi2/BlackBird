@@ -224,7 +224,7 @@ export default function EasyWallet() {
     if (!source || !withdraw || !epoch) return;
     setBusy(true);
     try {
-      const denom = Number(denomRaw);
+      const denom = denomRaw;
       const n = deriveSecretBytes(seed!, withdraw.publicKey, "vela/n");
       const t = deriveSecretBytes(seed!, withdraw.publicKey, "vela/t");
       const nullifier = computeNullifier(n);
@@ -235,7 +235,7 @@ export default function EasyWallet() {
         t: bytesToHex(t),
         P_w: withdraw.publicKey,
         nullifier: nullifier.toString(16),
-        denomination: denom,
+        denomination: String(denom),
         epoch,
       });
       if (!proofRes.proof || !proofRes.publicSignals) throw new Error("Proof failed");
@@ -244,7 +244,7 @@ export default function EasyWallet() {
       const withdrawRes = await apiPost("/api/withdraw", {
         destination: withdraw.address,
         epoch,
-        denomination: denom,
+        denomination: String(denom),
         nullifier: nullifier.toString(16),
         proof: proofRes.proof,
         publicSignals: proofRes.publicSignals,

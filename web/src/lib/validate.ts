@@ -13,10 +13,15 @@ export const depositRequestSchema = z.object({
   commit_hash: hexHashSchema,
 });
 
+const denominationSchema = z.union([
+  z.string().regex(/^\d+$/, "Denomination must be a numeric string"),
+  z.number().int().positive(),
+]);
+
 export const withdrawRequestSchema = z.object({
   destination: nanoAddressSchema,
   epoch: z.number().int().nonnegative(),
-  denomination: z.number().int().positive(),
+  denomination: denominationSchema,
   nullifier: z.string().min(1, "nullifier is required"),
   proof: z.any(),
   publicSignals: z.array(z.string()),
@@ -27,7 +32,7 @@ export const proveRequestSchema = z.object({
   t: hexHashSchema,
   P_w: hexHashSchema,
   nullifier: z.string().min(1, "nullifier is required"),
-  denomination: z.number().int().positive(),
+  denomination: denominationSchema,
   epoch: z.number().int().nonnegative(),
   leaf_index: z.number().int().nonnegative().optional(),
 });

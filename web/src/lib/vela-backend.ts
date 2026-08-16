@@ -62,7 +62,7 @@ export async function submitDeposit(body: {
 export async function submitWithdrawal(body: {
   destination: string;
   epoch: number;
-  denomination: number;
+  denomination: number | string;
   nullifier: string;
   proof: unknown;
   publicSignals: string[];
@@ -78,7 +78,7 @@ export async function requestProof(body: {
   t: string;
   P_w: string;
   nullifier: string;
-  denomination: number;
+  denomination: number | string;
   epoch: number;
   leaf_index?: number;
 }) {

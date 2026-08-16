@@ -140,7 +140,7 @@ class VelaIndexer:
     def verify_deposit_commitment_pair(self, deposit_hash: str, commit_hash: str) -> Optional[dict]:
         try:
             blocks = self.rpc.call("blocks_info", {
-                "hashes": json.dumps([deposit_hash, commit_hash]),
+                "hashes": [deposit_hash, commit_hash],
                 "json_block": "true",
             })
             dep = blocks["blocks"][deposit_hash]
@@ -156,7 +156,7 @@ class VelaIndexer:
             if amount_raw not in DENOMINATIONS:
                 return None
 
-            if dep_block.get("link") != pool_pubkey(amount_raw).hex():
+            if dep_block.get("link", "").lower() != pool_pubkey(amount_raw).hex().lower():
                 return None
 
             C_bytes = bytes.fromhex(com_block.get("link", ""))
@@ -223,7 +223,7 @@ def create_app(indexer: VelaIndexer) -> Flask:
         if result is None:
             return jsonify({"error": "invalid deposit/commit pair"}), 400
         indexer.add_commitment(result["epoch"], result["denomination"], int(result["commitment"], 16))
-        return jsonify({"ok": True, "commitment": result["commitment"]})
+        return jsonify({"ok": True, "commitment": result["commitment"], "epoch": result["epoch"]})
 
     @app.route("/api/withdraw", methods=["POST"])
     @require_api_key

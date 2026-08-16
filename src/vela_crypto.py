@@ -43,31 +43,54 @@ def blake2b_512(data: bytes) -> bytes:
     return hashlib.blake2b(data, digest_size=64).digest()
 
 
-def _encode_int(num: int, char_count: int) -> str:
-    chars = []
-    for _ in range(char_count):
-        chars.append(NANO_ALPHABET[num & 0x1F])
-        num >>= 5
-    return "".join(reversed(chars))
+def _nano_base32_encode(data: bytes) -> str:
+    """Encode bytes using the Nano-specific base32 alphabet."""
+    length = len(data)
+    leftover = (length * 8) % 5
+    offset = 0 if leftover == 0 else 5 - leftover
+    value = 0
+    bits = 0
+    out = []
+    for byte in data:
+        value = (value << 8) | byte
+        bits += 8
+        while bits >= 5:
+            out.append(NANO_ALPHABET[(value >> (bits + offset - 5)) & 0x1F])
+            bits -= 5
+    if bits > 0:
+        out.append(NANO_ALPHABET[(value << (5 - (bits + offset))) & 0x1F])
+    return "".join(out)
 
 
-def _decode_int(s: str) -> int:
-    num = 0
-    for c in s:
-        if c not in NANO_CHAR_TO_VALUE:
-            raise ValueError(f"Invalid Nano base32 character: {c}")
-        num = (num << 5) | NANO_CHAR_TO_VALUE[c]
-    return num
+def _nano_base32_decode(s: str) -> bytes:
+    """Decode a Nano-specific base32 encoded string into bytes."""
+    length = len(s)
+    leftover = (length * 5) % 8
+    offset = 0 if leftover == 0 else 8 - leftover
+    value = 0
+    bits = 0
+    out = bytearray()
+    for char in s:
+        if char not in NANO_CHAR_TO_VALUE:
+            raise ValueError(f"Invalid Nano base32 character: {char}")
+        value = (value << 5) | NANO_CHAR_TO_VALUE[char]
+        bits += 5
+        if bits >= 8:
+            out.append((value >> (bits + offset - 8)) & 0xFF)
+            bits -= 8
+    if bits > 0:
+        out.append((value << (bits + offset - 8)) & 0xFF)
+    if leftover != 0:
+        out = out[1:]
+    return bytes(out)
 
 
 def nano_address_from_pubkey(pubkey: bytes) -> str:
     if len(pubkey) != POINT_BYTES:
         raise ValueError("Public key must be 32 bytes")
-    num = int.from_bytes(pubkey, "big") << 4
-    encoded_pubkey = _encode_int(num, 52)
-    checksum = _encode_int(
-        int.from_bytes(hashlib.blake2b(pubkey, digest_size=5).digest()[::-1], "big"),
-        8,
+    encoded_pubkey = _nano_base32_encode(pubkey)
+    checksum = _nano_base32_encode(
+        hashlib.blake2b(pubkey, digest_size=5).digest()[::-1]
     )
     return "nano_" + encoded_pubkey + checksum
 
@@ -81,11 +104,11 @@ def nano_pubkey_from_address(address: str) -> bytes:
         raise ValueError("Invalid Nano address prefix")
     if len(payload) != 60:
         raise ValueError("Invalid Nano address length")
-    num = _decode_int(payload[:52]) >> 4
-    pubkey = num.to_bytes(POINT_BYTES, "big")
-    expected_checksum = _encode_int(
-        int.from_bytes(hashlib.blake2b(pubkey, digest_size=5).digest()[::-1], "big"),
-        8,
+    pubkey = _nano_base32_decode(payload[:52])
+    if len(pubkey) != POINT_BYTES:
+        raise ValueError("Invalid Nano address payload")
+    expected_checksum = _nano_base32_encode(
+        hashlib.blake2b(pubkey, digest_size=5).digest()[::-1]
     )
     if payload[52:] != expected_checksum:
         raise ValueError("Invalid Nano address checksum")
@@ -251,8 +274,8 @@ def nano_state_block_hash(
     balance: int,
     link: bytes,
 ) -> bytes:
-    """Hash a Nano state block (preamble 0x06)."""
-    preamble = b"\x06"
+    """Hash a Nano state block (32-byte preamble ending in 0x06)."""
+    preamble = b"\x00" * 31 + b"\x06"
     balance_bytes = balance.to_bytes(16, "big")
     data = preamble + account + previous + representative + balance_bytes + link
     return hashlib.blake2b(data, digest_size=32).digest()
