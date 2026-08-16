@@ -23,6 +23,7 @@ from .vela_crypto import pool_pubkey, nano_pubkey_from_address, compute_commitme
 from .poseidon_bridge import poseidon_tree, split32
 from .snarkjs_bridge import generate_proof
 from .nano_rpc import NanoRPC
+from .vela_guardian import FEE_BPS
 
 GUARDIAN_URL = os.environ.get("VELA_GUARDIAN_URL", "http://127.0.0.1:8081")
 
@@ -352,6 +353,10 @@ def create_app(indexer: VelaIndexer) -> Flask:
         except Exception as e:
             print("prove error:", e)
             return jsonify({"error": str(e)}), 400
+
+    @app.route("/api/fee")
+    def api_fee():
+        return jsonify({"fee_bps": FEE_BPS, "fee_percent": FEE_BPS / 100})
 
     @app.route("/api/pool_address/<int:denomination>")
     def api_pool_address(denomination):

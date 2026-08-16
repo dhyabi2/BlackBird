@@ -42,6 +42,13 @@ export async function getPoolStatus() {
   }>("/api/status");
 }
 
+export async function getFeeConfig() {
+  return velaFetch<{
+    fee_bps?: number;
+    fee_percent?: number;
+  }>("/api/fee");
+}
+
 export async function getPoolAddress(denomination: number | string) {
   return velaFetch<{
     denomination?: string;

@@ -19,7 +19,6 @@ const ZERO_HASH = "0000000000000000000000000000000000000000000000000000000000000
 const DEFAULT_REP = "nano_3jwrszth46rk1mu7rmb4rhm54us8yg1gw3ipodftqtikf5yqdyr7471nsg1k";
 const SEND_THRESHOLD = "fffffff800000000";
 const RECEIVE_THRESHOLD = "fffffe0000000000";
-const FEE_BPS = 50; // 0.5% guardian fee
 
 const DENOMINATIONS = [
   { raw: "100000000000000000000000000000", label: "0.1 XNO" },
@@ -47,8 +46,8 @@ function nano(raw: bigint): string {
   return rawToNano(raw.toString());
 }
 
-function withdrawFeeRaw(denominationRaw: bigint): bigint {
-  return (denominationRaw * BigInt(FEE_BPS)) / BigInt(10_000);
+function withdrawFeeRaw(denominationRaw: bigint, bps: number): bigint {
+  return (denominationRaw * BigInt(bps)) / BigInt(10_000);
 }
 
 function explorerLink(hash: string) {
@@ -118,6 +117,7 @@ export default function EasyWallet() {
   const [withdrawTx, setWithdrawTx] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [greenlight, setGreenlight] = useState<{ ok: boolean; error?: string } | null>(null);
+  const [feeBps, setFeeBps] = useState(50);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -135,6 +135,15 @@ export default function EasyWallet() {
     apiGet("/api/greenlight")
       .then(() => setGreenlight({ ok: true }))
       .catch((err) => setGreenlight({ ok: false, error: err instanceof Error ? err.message : "Network check failed" }));
+
+    // Load the current guardian fee policy from the backend so the UI always matches.
+    apiGet("/api/fee")
+      .then((c) => {
+        if (typeof c.fee_bps === "number" && c.fee_bps > 0) {
+          setFeeBps(c.fee_bps);
+        }
+      })
+      .catch(() => null);
   }, []);
 
   const source = useMemo(() => (seed ? deriveLegacyAccount(seed, sourceIndex) : null), [seed, sourceIndex]);
@@ -699,7 +708,7 @@ export default function EasyWallet() {
           <div className="flex-1">
             <h2 className="font-semibold">Withdraw to a fresh address</h2>
             <p className="text-sm text-black/50">
-              Receive {nano(BigInt(effectiveDenom) - withdrawFeeRaw(BigInt(effectiveDenom)))} XNO minus the {nano(withdrawFeeRaw(BigInt(effectiveDenom)))} XNO guardian fee (0.5%).
+              Receive {nano(BigInt(effectiveDenom) - withdrawFeeRaw(BigInt(effectiveDenom), feeBps))} XNO minus the {nano(withdrawFeeRaw(BigInt(effectiveDenom), feeBps))} XNO guardian fee ({(feeBps / 100).toFixed(1)}%).
             </p>
             <Button onClick={handleWithdraw} disabled={busy || !withdrawReady} variant="secondary" className="mt-4 w-full">
               {busy ? "Working..." : "Withdraw now"}
