@@ -6,10 +6,11 @@ const ZERO_HASH = "0".repeat(64);
 const RECEIVE_THRESHOLD = "fffffe0000000000";
 const DEFAULT_DENOM = "1000000000000000000000000000000"; // 1 XNO
 
-function getSeed() {
+async function getSeed() {
   if (process.env.GUARDIAN_SEED) return process.env.GUARDIAN_SEED;
   if (process.env.GUARDIAN_SEED_FILE) {
-    return (await import("fs")).readFileSync(process.env.GUARDIAN_SEED_FILE, "utf8").trim();
+    const fs = await import("fs");
+    return fs.readFileSync(process.env.GUARDIAN_SEED_FILE, "utf8").trim();
   }
   throw new Error("Set GUARDIAN_SEED or GUARDIAN_SEED_FILE");
 }
