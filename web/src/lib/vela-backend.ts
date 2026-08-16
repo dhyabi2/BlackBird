@@ -90,3 +90,24 @@ export async function requestProof(body: {
     body: JSON.stringify(body),
   });
 }
+
+export async function getDepositStatus(query: {
+  deposit_hash?: string;
+  commit_hash?: string;
+  commitment?: string;
+}) {
+  const params = new URLSearchParams();
+  if (query.deposit_hash) params.set("deposit_hash", query.deposit_hash);
+  if (query.commit_hash) params.set("commit_hash", query.commit_hash);
+  if (query.commitment) params.set("commitment", query.commitment);
+  return velaFetch<{
+    indexed: boolean;
+    commitment?: string;
+    epoch?: number;
+    denomination?: number;
+    root?: string | null;
+    leaf_index?: number;
+  }>(`/api/deposit_status?${params.toString()}`, {
+    method: "GET",
+  });
+}

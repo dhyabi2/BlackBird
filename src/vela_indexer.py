@@ -50,6 +50,9 @@ class PoseidonMerkleTree:
         indices = result["indices"]
         return path, indices
 
+    def leaf_index(self, C: int) -> int:
+        return self._leaf_index_map[C]
+
 
 class VelaIndexer:
     def __init__(self, data_dir: str = "data"):
@@ -224,6 +227,52 @@ def create_app(indexer: VelaIndexer) -> Flask:
             return jsonify({"error": "invalid deposit/commit pair"}), 400
         indexer.add_commitment(result["epoch"], result["denomination"], int(result["commitment"], 16))
         return jsonify({"ok": True, "commitment": result["commitment"], "epoch": result["epoch"]})
+
+    @app.route("/api/deposit_status", methods=["GET", "POST"])
+    @require_api_key
+    def api_deposit_status():
+        data = request.args if request.method == "GET" else (request.json or {})
+        C: Optional[int] = None
+        epoch: Optional[int] = None
+        denomination: Optional[int] = None
+
+        deposit_hash = data.get("deposit_hash")
+        commit_hash = data.get("commit_hash")
+        C_hex = data.get("commitment")
+
+        if deposit_hash and commit_hash:
+            pair = indexer.verify_deposit_commitment_pair(deposit_hash, commit_hash)
+            if pair is None:
+                return jsonify({"error": "invalid deposit/commit pair"}), 400
+            C = int(pair["commitment"], 16)
+            epoch = pair["epoch"]
+            denomination = pair["denomination"]
+        elif C_hex:
+            try:
+                C = int(C_hex, 16)
+            except Exception:
+                return jsonify({"error": "invalid commitment"}), 400
+            for (e, d), leaves in indexer.commitments.items():
+                if C in leaves:
+                    epoch = e
+                    denomination = d
+                    break
+        else:
+            return jsonify({"error": "missing deposit_hash+commit_hash or commitment"}), 400
+
+        if C is None or epoch is None or denomination is None:
+            return jsonify({"indexed": False}), 200
+
+        root = indexer.get_root(epoch, denomination)
+        proof_info = indexer.get_proof(epoch, denomination, C)
+        return jsonify({
+            "indexed": proof_info is not None,
+            "commitment": hex(C),
+            "epoch": epoch,
+            "denomination": denomination,
+            "root": hex(root) if root else None,
+            "leaf_index": indexer.leaf_index(C),
+        })
 
     @app.route("/api/withdraw", methods=["POST"])
     @require_api_key
