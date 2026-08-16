@@ -15,7 +15,7 @@ import { useNanoWebsocket } from "@/lib/nano-ws";
 const STORAGE_KEY = "vela_wallet_v1";
 const SESSION_SEED_KEY = "vela_session_seed";
 const ZERO_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
-const DEFAULT_REP = "nano_1center16minsswuug1d1pwxjqqz49y4pqzc8m3rpx5c8j5eu6ns7b6k3rj1i";
+const DEFAULT_REP = "nano_3jwrszth46rk1mu7rmb4rhm54us8yg1gw3ipodftqtikf5yqdyr7471nsg1k";
 
 const DENOMINATIONS = [
   { raw: "100000000000000000000000000000", label: "0.1 XNO" },
