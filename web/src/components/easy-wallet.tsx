@@ -16,6 +16,7 @@ import { ALLOWED_DENOMINATIONS } from "@/lib/denominations";
 
 const STORAGE_KEY = "blackbird_wallet_v1";
 const SESSION_SEED_KEY = "blackbird_session_seed";
+const LEGACY_STORAGE_KEY = "vela_wallet_v1";
 const ZERO_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
 const DEFAULT_REP = "nano_3jwrszth46rk1mu7rmb4rhm54us8yg1gw3ipodftqtikf5yqdyr7471nsg1k";
 const SEND_THRESHOLD = "fffffff800000000";
@@ -85,19 +86,9 @@ export default function EasyWallet() {
   const [password, setPassword] = useState("");
   const [passwordConfirm, setPasswordConfirm] = useState("");
   const [phrase, setPhrase] = useState("");
-  const [seed, setSeed] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    return sessionStorage.getItem(SESSION_SEED_KEY);
-  });
-  const [stored, setStored] = useState<string | null>(() =>
-    typeof window !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null
-  );
-  const [view, setView] = useState<"locked" | "create" | "restore" | "dashboard">(() => {
-    if (typeof window === "undefined") return "create";
-    if (sessionStorage.getItem(SESSION_SEED_KEY)) return "dashboard";
-    if (localStorage.getItem(STORAGE_KEY)) return "locked";
-    return "create";
-  });
+  const [seed, setSeed] = useState<string | null>(null);
+  const [stored, setStored] = useState<string | null>(null);
+  const [view, setView] = useState<"locked" | "create" | "restore" | "dashboard">("locked");
   const [error, setError] = useState<string | null>(null);
 
   const [sourceIndex] = useState(0);
@@ -119,6 +110,46 @@ export default function EasyWallet() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [greenlight, setGreenlight] = useState<{ ok: boolean; error?: string } | null>(null);
   const [feeBps, setFeeBps] = useState(50);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    // Migrate wallets saved under the old VELA branding key.
+    try {
+      const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+      if (legacy && !localStorage.getItem(STORAGE_KEY)) {
+        localStorage.setItem(STORAGE_KEY, legacy);
+        localStorage.removeItem(LEGACY_STORAGE_KEY);
+      }
+    } catch {
+      // ignore storage errors
+    }
+
+    const saved = (() => {
+      try {
+        return localStorage.getItem(STORAGE_KEY);
+      } catch {
+        return null;
+      }
+    })();
+    const sessionSeed = (() => {
+      try {
+        return sessionStorage.getItem(SESSION_SEED_KEY);
+      } catch {
+        return null;
+      }
+    })();
+
+    if (sessionSeed) {
+      setSeed(sessionSeed);
+      setView("dashboard");
+    } else if (saved) {
+      setStored(saved);
+      setView("locked");
+    } else {
+      setView("create");
+    }
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
