@@ -15,9 +15,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "VELA v2 — Nano Privacy Pool",
+  title: "BlackBird — Nano Privacy Pool",
   description:
-    "Production web client for the VELA v2 zero-knowledge privacy pool on Nano.",
+    "Production web client for the BlackBird zero-knowledge privacy pool on Nano.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -31,7 +31,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <Nav />
         <main className="flex-1">{children}</main>
         <footer className="border-t border-black/10 py-6 text-center text-sm text-black/50">
-          VELA v2 — unaudited prototype. Use at your own risk.
+          BlackBird — unaudited prototype. Use at your own risk.
         </footer>
       </body>
     </html>

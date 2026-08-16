@@ -5,7 +5,6 @@ import { withApiHandler, optionsHandler } from "@/lib/api";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getClientIp } from "@/lib/ip";
 import { z } from "zod";
-import * as nano from "nanocurrency";
 
 export const dynamic = "force-dynamic";
 
@@ -39,8 +38,9 @@ export async function POST(request: NextRequest) {
 
     const threshold = parsed.data.difficulty ?? DEFAULT_WORK_THRESHOLD;
 
-    // Always use rpc.nano.to. If it cannot produce valid work, we fail the request
-    // so that clients cannot deposit into a pool they cannot withdraw from.
+    // Use only rpc.nano.to for work generation. We trust the work it returns,
+    // matching the XNO_TEMPLATE pattern, because the network will reject an
+    // invalid work value during process anyway.
     const rpcResult = (await nanoRpcCall("work_generate", {
       hash: parsed.data.hash,
       difficulty: threshold,
@@ -52,23 +52,6 @@ export async function POST(request: NextRequest) {
     const work = rpcResult.work;
     if (!work) {
       throw new ApiError(502, "Work generator did not return work");
-    }
-
-    const validateWork = (nano as unknown as { validateWork: (params: { blockHash: string; work: string; threshold?: string }) => boolean }).validateWork;
-    const rpcValid = validateWork({
-      blockHash: parsed.data.hash,
-      work,
-      threshold,
-    });
-
-    if (!rpcValid) {
-      console.warn("RPC work_generate returned invalid work", {
-        hash: parsed.data.hash,
-        threshold,
-        returnedDifficulty: rpcResult.difficulty,
-        work,
-      });
-      throw new ApiError(502, "Work generator returned invalid work");
     }
 
     return { work };

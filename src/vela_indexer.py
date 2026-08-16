@@ -327,6 +327,20 @@ def create_app(indexer: VelaIndexer) -> Flask:
         except Exception as e:
             return jsonify({"error": str(e)}), 400
 
+    @app.route("/api/broadcast_withdrawal", methods=["POST"])
+    @require_api_key
+    def api_broadcast_withdrawal():
+        data = request.json or {}
+        headers = {"X-VELA-API-Key": _GUARDIAN_API_KEY} if _GUARDIAN_API_KEY else {}
+        resp = requests.post(f"{GUARDIAN_URL}/broadcast_withdrawal", json=data, headers=headers, timeout=30)
+        try:
+            body = resp.json()
+        except Exception:
+            body = {"error": resp.text}
+        if not resp.ok:
+            return jsonify(body), resp.status_code
+        return jsonify(body)
+
     @app.route("/api/prove", methods=["POST"])
     @require_api_key
     def api_prove():

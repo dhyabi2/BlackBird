@@ -93,7 +93,7 @@ export async function submitWithdrawalBroadcast(body: {
     work: string;
   };
 }) {
-  return velaFetch("/broadcast_withdrawal", {
+  return velaFetch("/api/broadcast_withdrawal", {
     method: "POST",
     body: JSON.stringify(body),
   });

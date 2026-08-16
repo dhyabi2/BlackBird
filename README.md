@@ -1,6 +1,8 @@
-# VELA v2
+# BlackBird
 
 A decentralized privacy layer for Nano (XNO). Users deposit into a common pool and withdraw to fresh addresses using Groth16 zero-knowledge proofs. The pool key is controlled by a threshold guardian network, so no single machine ever holds the funds.
+
+Live app: https://www.xblackbird.com
 
 > For the full protocol design, see [`DESIGN.md`](DESIGN.md).
 
@@ -36,6 +38,7 @@ config/
 
 A single-guardian deployment is running on a Hostinger VPS for testing and integration:
 
+- **Web app:** https://www.xblackbird.com
 - **Indexer:** `http://127.0.0.1:8080` (VPS localhost) / Tor: `ejg5mnh3lvhmgwyrxrbzuqgd3k3siplndsxhzht23vxitjxppf2yukid.onion`
 - **Guardian:** `http://127.0.0.1:8081` (VPS localhost) / Tor: `jnigdgannexjxemablsyxwf6uass3ufcq4xu6eftmrwadym3z3dleyad.onion`
 - **Pool address:** derived from the guardian seed; see `/pool_address` on the guardian.
@@ -55,7 +58,7 @@ The circuit must be compiled and trusted-setup artifacts generated before real p
 
 ### 2. Configure Nano RPC
 
-VELA uses [rpc.nano.to](https://rpc.nano.to) as the only Nano RPC endpoint. Obtain an API key from rpc.nano.to and set it as an environment variable:
+BlackBird uses [rpc.nano.to](https://rpc.nano.to) as the only Nano RPC endpoint. Obtain an API key from rpc.nano.to and set it as an environment variable:
 
 ```bash
 export NANO_RPC_KEY=<YOUR_RPC_NANO_TO_KEY>
@@ -71,7 +74,7 @@ The key is sent as an `Authorization: <key>` header and also as a `key` body par
 
 The endpoint is fixed to `https://rpc.nano.to`; public fallback endpoints are not used, so the RPC key is never sent elsewhere.
 
-### 3. Generate a VelaID
+### 3. Generate a BlackBird ID
 
 ```bash
 source venv/bin/activate

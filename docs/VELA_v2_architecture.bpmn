@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC" xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI" id="VELA_v2_full" targetNamespace="http://vela.protocol" exporter="Kimi Code CLI" exporterVersion="2.1">
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC" xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI" id="BlackBird_full" targetNamespace="http://blackbird.protocol" exporter="Kimi Code CLI" exporterVersion="2.1">
   <collaboration id="Collaboration_1">
     <participant id="Participant_Client" name="Client / e2e Harness" processRef="Process_Client"/>
     <participant id="Participant_WebApp" name="Web App (Next.js API proxy)" processRef="Process_WebApp"/>
     <participant id="Participant_NanoRPC" name="Nano RPC (rpc.nano.to)" processRef="Process_NanoRPC"/>
-    <participant id="Participant_Indexer" name="VELA Indexer" processRef="Process_Indexer"/>
-    <participant id="Participant_Guardian" name="VELA Guardian" processRef="Process_Guardian"/>
+    <participant id="Participant_Indexer" name="BlackBird Indexer" processRef="Process_Indexer"/>
+    <participant id="Participant_Guardian" name="BlackBird Guardian" processRef="Process_Guardian"/>
     <participant id="Participant_Ledger" name="Nano Ledger" processRef="Process_Ledger"/>
     <messageFlow id="MF_ClientDeposit" sourceRef="Task_ClientSubmitDeposit" targetRef="Start_WebDeposit"/>
     <messageFlow id="MF_ClientProve" sourceRef="Task_ClientRequestProof" targetRef="Start_WebProve"/>
@@ -146,7 +146,7 @@
     <sequenceFlow id="WP1" sourceRef="Start_WebPending" targetRef="Task_ValidatePending"/>
     <sequenceFlow id="WP2" sourceRef="Task_ValidatePending" targetRef="Task_WebCallNanoRPC"/>
     <startEvent id="Start_WebWork" name="POST /api/work"/>
-    <task id="Task_ValidateWork" name="Validate hash &amp; difficulty, rate limit; reject if RPC returns invalid work (no local fallback)"/>
+    <task id="Task_ValidateWork" name="Validate hash &amp; difficulty, rate limit; request work from rpc.nano.to only (no local fallback)"/>
     <sequenceFlow id="WW1" sourceRef="Start_WebWork" targetRef="Task_ValidateWork"/>
     <sequenceFlow id="WW2" sourceRef="Task_ValidateWork" targetRef="Task_WebCallNanoRPC"/>
     <startEvent id="Start_WebBroadcast" name="POST /api/broadcast"/>
@@ -166,9 +166,9 @@
     <sequenceFlow id="WWi1" sourceRef="Start_WebWithdraw" targetRef="Task_ValidateWithdrawReq"/>
     <sequenceFlow id="WWi2" sourceRef="Task_ValidateWithdrawReq" targetRef="Task_WebForwardWithdraw"/>
     <task id="Task_WebCallNanoRPC" name="Proxy only to rpc.nano.to (account_info, pending, work_generate, process); no fallback endpoints"/>
-    <task id="Task_WebForwardDeposit" name="Forward to VELA Indexer /api/deposit"/>
-    <task id="Task_WebForwardProve" name="Forward to VELA Indexer /api/prove"/>
-    <task id="Task_WebForwardWithdraw" name="Forward to VELA Guardian /withdraw"/>
+    <task id="Task_WebForwardDeposit" name="Forward to BlackBird Indexer /api/deposit"/>
+    <task id="Task_WebForwardProve" name="Forward to BlackBird Indexer /api/prove"/>
+    <task id="Task_WebForwardWithdraw" name="Forward to BlackBird Guardian /withdraw"/>
     <task id="Task_WebReturnResponse" name="Return JSON response to client"/>
     <endEvent id="End_WebOK" name="200 OK"/>
     <endEvent id="End_WebError" name="4xx/5xx error"/>
@@ -393,7 +393,7 @@
     <sequenceFlow id="GU17" sourceRef="Task_ReturnBlock" targetRef="End_GuardianSigned"/>
     <sequenceFlow id="GU18" sourceRef="Task_RejectRequest" targetRef="End_GuardianRejected"/>
   </process>
-  <bpmndi:BPMNDiagram id="BPMNDiagram_1" name="VELA v2 Full Architecture">
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1" name="BlackBird Full Architecture">
     <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Collaboration_1">
       <bpmndi:BPMNShape id="Participant_Client_di" bpmnElement="Participant_Client" isHorizontal="true">
         <omgdc:Bounds x="80" y="80" width="1700" height="260"/>

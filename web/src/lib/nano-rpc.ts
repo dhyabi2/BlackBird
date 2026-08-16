@@ -17,7 +17,7 @@ export async function nanoRpcCall<T = unknown>(
     headers: {
       "Content-Type": "application/json",
       Authorization: env.NANO_RPC_KEY,
-      "User-Agent": "VELA-web/1.0",
+      "User-Agent": "BlackBird-web/1.0",
     },
     body: JSON.stringify(body),
     cache: "no-store",

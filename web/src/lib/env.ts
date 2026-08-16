@@ -7,8 +7,8 @@ const envSchema = z.object({
   VELA_BACKEND_API_KEY: z.string().min(1, "VELA_BACKEND_API_KEY is required"),
   UPSTASH_REDIS_REST_URL: z.string().url().optional(),
   UPSTASH_REDIS_REST_TOKEN: z.string().optional(),
-  NEXT_PUBLIC_APP_NAME: z.string().default("VELA v2"),
-  NEXT_PUBLIC_APP_URL: z.string().url().default("http://localhost:3000"),
+  NEXT_PUBLIC_APP_NAME: z.string().default("BlackBird"),
+  NEXT_PUBLIC_APP_URL: z.string().url().default("https://xblackbird.com"),
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -15,7 +15,7 @@ export function Nav() {
     <nav className="border-b border-black/10 bg-white">
       <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-4">
         <Link href="/" className="text-xl font-bold tracking-tight">
-          VELA v2
+          BlackBird
         </Link>
         <ul className="flex gap-6 text-sm font-medium">
           {links.map((link) => (

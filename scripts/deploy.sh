@@ -17,6 +17,7 @@ echo "=== Deploying VELA v2 to $VPS_HOST ==="
     --exclude=.git \
     --exclude=data \
     --exclude=.next \
+    --exclude=.vercel \
     --exclude=.env \
     --exclude=.env.local \
     --exclude=.env.* \

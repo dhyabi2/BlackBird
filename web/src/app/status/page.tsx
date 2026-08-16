@@ -42,7 +42,7 @@ export default function StatusPage() {
 
       <div className="mt-8 grid gap-6">
         <StatusCard title="Vercel / RPC health" data={health} />
-        <StatusCard title="VELA pool status" data={status} />
+        <StatusCard title="BlackBird pool status" data={status} />
       </div>
 
       <form onSubmit={lookupBalance} className="mt-10 space-y-4">
