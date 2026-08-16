@@ -14,8 +14,9 @@ export function Nav() {
   return (
     <nav className="border-b border-black/10 bg-white">
       <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-4">
-        <Link href="/" className="text-xl font-bold tracking-tight">
-          BlackBird
+        <Link href="/" className="flex items-center gap-2 text-xl font-bold tracking-tight">
+          <img src="/icon.png" alt="BlackBird" className="h-8 w-auto" />
+          <span>BlackBird</span>
         </Link>
         <ul className="flex gap-6 text-sm font-medium">
           {links.map((link) => (
