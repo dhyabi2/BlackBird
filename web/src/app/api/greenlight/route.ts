@@ -20,7 +20,7 @@ export async function GET() {
       throw new Error("Nano RPC is not returning a valid block count");
     }
 
-    // Check VELA backend indexer is live and has a current epoch.
+    // Check BlackBird backend indexer is live and has a current epoch.
     const backendUrl = `${env.VELA_BACKEND_URL.replace(/\/$/, "")}/api/status`;
     const backendRes = await fetch(backendUrl, {
       headers: {
@@ -30,7 +30,7 @@ export async function GET() {
       cache: "no-store",
     });
     if (!backendRes.ok) {
-      throw new Error("VELA backend is not responding");
+      throw new Error("BlackBird backend is not responding");
     }
     const backend = (await backendRes.json()) as {
       status?: string;
@@ -38,7 +38,7 @@ export async function GET() {
       pool_pubkey?: string;
     };
     if (backend.status !== "ok" || !backend.epoch || !backend.pool_pubkey) {
-      throw new Error("VELA backend returned an invalid status");
+      throw new Error("BlackBird backend returned an invalid status");
     }
 
     return {

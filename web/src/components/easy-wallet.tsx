@@ -14,8 +14,8 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { useNanoWebsocket } from "@/lib/nano-ws";
 import { ALLOWED_DENOMINATIONS } from "@/lib/denominations";
 
-const STORAGE_KEY = "vela_wallet_v1";
-const SESSION_SEED_KEY = "vela_session_seed";
+const STORAGE_KEY = "blackbird_wallet_v1";
+const SESSION_SEED_KEY = "blackbird_session_seed";
 const ZERO_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
 const DEFAULT_REP = "nano_3jwrszth46rk1mu7rmb4rhm54us8yg1gw3ipodftqtikf5yqdyr7471nsg1k";
 const SEND_THRESHOLD = "fffffff800000000";
