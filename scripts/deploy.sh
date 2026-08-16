@@ -10,20 +10,48 @@ RSYNC=(rsync -e "ssh -i $SSH_KEY")
 
 echo "=== Deploying VELA v2 to $VPS_HOST ==="
 
-# Sync code
-"${RSYNC[@]}" -avz --exclude=venv --exclude=node_modules --exclude=.git --exclude=data --exclude=.next \
+# Sync code, but never copy local secrets or runtime data.
+"${RSYNC[@]}" -avz \
+    --exclude=venv \
+    --exclude=node_modules \
+    --exclude=.git \
+    --exclude=data \
+    --exclude=.next \
+    --exclude=.env \
+    --exclude=.env.local \
+    --exclude=.env.* \
+    --exclude='*.seed' \
+    --exclude='web/test-wallets.json' \
+    --exclude='web/nano-wallet.dat' \
     /Users/mac/verifyXNOPrivacyProtocol/ root@$VPS_HOST:/opt/vela/
-
-# Run setup on VPS
-$SSH root@$VPS_HOST 'bash /opt/vela/scripts/setup_vps.sh'
 
 # Install Python deps on VPS
 $SSH root@$VPS_HOST 'cd /opt/vela && python3 -m venv venv && venv/bin/pip install -r requirements.txt'
 
-# Install npm deps on VPS (for snarkjs if needed)
+# Install npm deps on the VPS (for snarkjs helpers)
 $SSH root@$VPS_HOST 'cd /opt/vela && npm install'
 
-# Install systemd services
+# Rotate guardian seed if requested. Existing deposits to the old pool addresses will be
+# unreachable, so only do this when the pools are empty.
+if [ "${ROTATE_GUARDIAN_SEED:-0}" = "1" ]; then
+    echo "=== Rotating guardian seed ==="
+    $SSH root@$VPS_HOST '
+        if [ -f /opt/vela/.guardian_seed ]; then
+            cp /opt/vela/.guardian_seed /opt/vela/.guardian_seed.old.$(date +%s)
+        fi
+        openssl rand -hex 32 > /opt/vela/.guardian_seed
+        chmod 600 /opt/vela/.guardian_seed
+        echo "New guardian seed generated. Old seed backed up."
+    '
+fi
+
+# Ensure key files have restrictive permissions
+$SSH root@$VPS_HOST '
+    chmod 600 /opt/vela/.guardian_seed 2>/dev/null || true
+    chmod 600 /opt/vela/.vela_api_key 2>/dev/null || true
+'
+
+# Install systemd services and restart
 $SSH root@$VPS_HOST '
     cp /opt/vela/config/vela-indexer.service /etc/systemd/system/
     cp /opt/vela/config/vela-guardian.service /etc/systemd/system/
@@ -35,5 +63,3 @@ $SSH root@$VPS_HOST '
 echo "=== Deployment complete ==="
 echo "Indexer: http://127.0.0.1:8080"
 echo "Guardian: http://127.0.0.1:8081"
-echo "Tor hidden service hostnames:"
-$SSH root@$VPS_HOST 'cat /var/lib/tor/vela_indexer/hostname 2>/dev/null; echo; cat /var/lib/tor/vela_guardian/hostname 2>/dev/null; echo'

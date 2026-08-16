@@ -250,12 +250,30 @@ def hash_to_edwards(data: bytes, max_attempts: int = 10000) -> bytes:
     raise RuntimeError("Failed to find valid Ed25519 point")
 
 
-def pool_pubkey(denomination: int) -> bytes:
-    return hash_to_edwards(b"vela/v2/pool" + str(denomination).encode())
+def _guardian_seed() -> bytes:
+    seed_hex = os.environ.get("GUARDIAN_SEED")
+    if not seed_hex:
+        raise ValueError("GUARDIAN_SEED not configured")
+    return bytes.fromhex(seed_hex)
 
 
-def pool_address(denomination: int) -> str:
-    return nano_address_from_pubkey(pool_pubkey(denomination))
+def pool_keypair(denomination: int, seed: Optional[bytes] = None) -> Tuple[ed25519_blake2b.SigningKey, bytes]:
+    """Derive the spendable pool keypair for a denomination from the guardian seed."""
+    if seed is None:
+        seed = _guardian_seed()
+    data = seed + str(denomination).encode()
+    priv_seed = hashlib.blake2b(data, digest_size=32).digest()
+    sk = ed25519_blake2b.SigningKey(priv_seed)
+    pk = sk.get_verifying_key().to_bytes()
+    return sk, pk
+
+
+def pool_pubkey(denomination: int, seed: Optional[bytes] = None) -> bytes:
+    return pool_keypair(denomination, seed)[1]
+
+
+def pool_address(denomination: int, seed: Optional[bytes] = None) -> str:
+    return nano_address_from_pubkey(pool_pubkey(denomination, seed))
 
 
 def protocol_data_account() -> str:

@@ -18,13 +18,20 @@ const denominationSchema = z.union([
   z.number().int().positive(),
 ]);
 
+const snarkjsProofSchema = z.object({
+  pi_a: z.array(z.string()),
+  pi_b: z.array(z.array(z.string())),
+  pi_c: z.array(z.string()),
+  protocol: z.string().optional(),
+});
+
 export const withdrawRequestSchema = z.object({
   destination: nanoAddressSchema,
   epoch: z.number().int().nonnegative(),
   denomination: denominationSchema,
   nullifier: z.string().min(1, "nullifier is required"),
-  proof: z.any(),
-  publicSignals: z.array(z.string()),
+  proof: snarkjsProofSchema,
+  publicSignals: z.array(z.string()).length(4),
 });
 
 export const proveRequestSchema = z.object({

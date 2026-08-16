@@ -8,8 +8,20 @@ import { z } from "zod";
 
 export const dynamic = "force-dynamic";
 
+const hex64 = z.string().regex(/^[0-9a-fA-F]{64}$/);
+const hex16 = z.string().regex(/^[0-9a-fA-F]{16}$/);
+
 const broadcastSchema = z.object({
-  block: z.record(z.string(), z.any()),
+  block: z.object({
+    type: z.literal("state"),
+    account: z.string().regex(/^nano_[13456789abcdefghijkmnopqrstuwxyz]{60}$/),
+    previous: hex64,
+    representative: z.string().regex(/^nano_[13456789abcdefghijkmnopqrstuwxyz]{60}$/),
+    balance: z.string().regex(/^\d+$/),
+    link: hex64,
+    signature: hex64,
+    work: hex16,
+  }),
 });
 
 export function OPTIONS() {

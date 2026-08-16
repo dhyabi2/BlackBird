@@ -7,27 +7,29 @@ Groth16 ZK withdrawal proofs, and signs/broadcasts Nano withdrawal transactions.
 The production design uses a t-of-n FROST threshold signer set so that no
 single machine controls the pool key. See DESIGN.md for the full architecture.
 """
+import functools
 import json
 import os
+import secrets
+import tempfile
+import threading
 import time
-from typing import List, Optional
+from typing import Optional
 
 import requests
 from flask import Flask, request, jsonify
 
 from .vela_crypto import (
-    nano_seed_to_keypair,
-    nano_address_from_pubkey,
+    pool_keypair,
+    pool_address,
     nano_pubkey_from_address,
     nano_state_block_hash,
     sign_message,
 )
-from .poseidon_bridge import split32, field_to_bytes32
+from .poseidon_bridge import split32
 from .snarkjs_bridge import verify_proof
 from .nano_rpc import NanoRPC
-
-EPOCH_SECONDS = 86400
-FEE_BPS = 50  # 0.5% guardian fee
+from .vela_constants import EPOCH_SECONDS, FEE_BPS, DENOMINATIONS
 
 
 def withdraw_fee_for(denomination: int) -> int:
@@ -38,17 +40,28 @@ def withdraw_fee_for(denomination: int) -> int:
     return (denomination * FEE_BPS) // 10_000
 
 
+def require_api_key(f):
+    @functools.wraps(f)
+    def decorated(*args, **kwargs):
+        expected = os.environ.get("VELA_API_KEY", "")
+        if not expected:
+            return jsonify({"error": "API key not configured"}), 500
+        provided = request.headers.get("X-VELA-API-Key", "")
+        if not provided or not secrets.compare_digest(expected, provided):
+            return jsonify({"error": "unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+
 class VelaGuardian:
     def __init__(self, seed: bytes, indexer_url: str = "http://127.0.0.1:8080", data_dir: str = "data"):
         self.seed = seed
         self.indexer_url = indexer_url
         self.data_dir = data_dir
         self.session = requests.Session()
-        # Pool keypair for all denominations (simplification; production uses DKG per denom)
-        self.pool_sk, self.pool_pub = nano_seed_to_keypair(seed, index=0)
-        self.pool_address = nano_address_from_pubkey(self.pool_pub)
         self.rpc = NanoRPC()
         self.spent_nullifiers: set = set()
+        self._lock = threading.Lock()
         self._load_state()
 
     def _state_path(self) -> str:
@@ -56,23 +69,42 @@ class VelaGuardian:
 
     def _load_state(self):
         os.makedirs(self.data_dir, exist_ok=True)
-        if os.path.exists(self._state_path()):
+        path = self._state_path()
+        if os.path.exists(path):
             try:
-                with open(self._state_path()) as f:
+                with open(path) as f:
                     data = json.load(f)
                 self.spent_nullifiers = set(int(x, 16) for x in data.get("nullifiers", []))
             except Exception as e:
                 print("Guardian load state error:", e)
 
     def _save_state(self):
+        """Atomically persist state with restricted permissions."""
         os.makedirs(self.data_dir, exist_ok=True)
-        with open(self._state_path(), "w") as f:
-            json.dump({"nullifiers": [hex(x) for x in self.spent_nullifiers]}, f)
+        path = self._state_path()
+        fd, tmp = tempfile.mkstemp(dir=self.data_dir, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump({"nullifiers": [hex(x) for x in self.spent_nullifiers]}, f)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except Exception:
+                pass
+            raise
 
     def _indexer_get(self, path: str) -> dict:
         resp = self.session.get(self.indexer_url + path, timeout=10)
         resp.raise_for_status()
         return resp.json()
+
+    def _get_account_info(self, address: str) -> dict:
+        return self.rpc.call("account_info", {"account": address, "representative": "true"})
+
+    def _broadcast_block(self, block: dict) -> dict:
+        return self.rpc.call("process", {"json_block": "true", "block": block})
 
     def verify_withdrawal_request(self, req: dict) -> Optional[dict]:
         """
@@ -88,10 +120,15 @@ class VelaGuardian:
         try:
             epoch = int(req["epoch"])
             denomination = int(req["denomination"])
+            if denomination not in DENOMINATIONS:
+                return None
             P_w = bytes.fromhex(req["P_w"])
             N = int(req["nullifier"], 16)
             proof = req["proof"]
             public_signals = req["publicSignals"]
+
+            if denomination not in DENOMINATIONS:
+                return None
 
             if len(public_signals) != 4:
                 return None
@@ -114,9 +151,6 @@ class VelaGuardian:
             if pub_root != expected_root:
                 return None
 
-            if N in self.spent_nullifiers:
-                return None
-
             if not verify_proof(proof, public_signals):
                 return None
 
@@ -129,12 +163,6 @@ class VelaGuardian:
             print("verify withdrawal error:", e)
             return None
 
-    def _get_account_info(self, address: str) -> dict:
-        return self.rpc.call("account_info", {"account": address, "representative": "true"})
-
-    def _broadcast_block(self, block: dict) -> dict:
-        return self.rpc.call("process", {"json_block": "true", "block": block})
-
     def withdraw(self, req: dict) -> dict:
         verified = self.verify_withdrawal_request(req)
         print("withdraw verify result:", verified)
@@ -145,7 +173,12 @@ class VelaGuardian:
         P_w = verified["P_w"]
         N = verified["N"]
 
-        info = self._get_account_info(self.pool_address)
+        # Derive the spendable pool keypair for this denomination.
+        pool_sk, pool_pub = pool_keypair(denomination, self.seed)
+        pool_addr = pool_address(denomination, self.seed)
+
+        # Fetch pool account info outside the lock.
+        info = self._get_account_info(pool_addr)
         if "error" in info:
             return {"error": f"pool account info failed: {info['error']}"}
 
@@ -158,28 +191,34 @@ class VelaGuardian:
         if new_balance < 0:
             return {"error": "insufficient pool balance"}
 
-        block_hash = nano_state_block_hash(
-            self.pool_pub,
-            previous,
-            representative,
-            new_balance,
-            P_w,
-        )
-        signature = sign_message(self.pool_sk, block_hash)
+        # Prevent concurrent double-spend of the same nullifier.
+        with self._lock:
+            if N in self.spent_nullifiers:
+                return {"error": "nullifier already spent"}
 
-        block = {
-            "type": "state",
-            "account": self.pool_address,
-            "previous": previous.hex(),
-            "representative": info["representative"],
-            "balance": str(new_balance),
-            "link": P_w.hex(),
-            "signature": signature.hex(),
-            "work": "0000000000000000",
-        }
+            block_hash = nano_state_block_hash(
+                pool_pub,
+                previous,
+                representative,
+                new_balance,
+                P_w,
+            )
+            signature = sign_message(pool_sk, block_hash)
 
-        self.spent_nullifiers.add(N)
-        self._save_state()
+            block = {
+                "type": "state",
+                "account": pool_addr,
+                "previous": previous.hex(),
+                "representative": info["representative"],
+                "balance": str(new_balance),
+                "link": P_w.hex(),
+                "signature": signature.hex(),
+                "work": "0000000000000000",
+            }
+
+            self.spent_nullifiers.add(N)
+            self._save_state()
+
         return {
             "ok": True,
             "block": block,
@@ -195,17 +234,18 @@ def create_app(guardian: VelaGuardian) -> Flask:
 
     @app.route("/")
     def health():
-        return jsonify({"status": "ok", "pool_address": guardian.pool_address})
+        return jsonify({"status": "ok"})
 
     @app.route("/pool_address")
     def pool_address_route():
-        return jsonify({"address": guardian.pool_address})
+        return jsonify({"address": pool_address(10**30, guardian.seed)})
 
     @app.route("/fee")
     def fee_route():
         return jsonify({"fee_bps": FEE_BPS, "note": "0.5% of denomination"})
 
     @app.route("/withdraw", methods=["POST"])
+    @require_api_key
     def withdraw():
         data = request.json or {}
         result = guardian.withdraw(data)

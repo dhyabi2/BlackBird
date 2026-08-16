@@ -12,6 +12,7 @@ import { convert, Unit } from "nanocurrency";
 import { Button } from "@/components/ui/Button";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { useNanoWebsocket } from "@/lib/nano-ws";
+import { ALLOWED_DENOMINATIONS } from "@/lib/denominations";
 
 const STORAGE_KEY = "vela_wallet_v1";
 const SESSION_SEED_KEY = "vela_session_seed";
@@ -21,10 +22,10 @@ const SEND_THRESHOLD = "fffffff800000000";
 const RECEIVE_THRESHOLD = "fffffe0000000000";
 
 const DENOMINATIONS = [
-  { raw: "100000000000000000000000000000", label: "0.1 XNO" },
-  { raw: "1000000000000000000000000000000", label: "1 XNO" },
-  { raw: "10000000000000000000000000000000", label: "10 XNO" },
-  { raw: "100000000000000000000000000000000", label: "100 XNO" },
+  { raw: ALLOWED_DENOMINATIONS[0], label: "0.1 XNO" },
+  { raw: ALLOWED_DENOMINATIONS[1], label: "1 XNO" },
+  { raw: ALLOWED_DENOMINATIONS[2], label: "10 XNO" },
+  { raw: ALLOWED_DENOMINATIONS[3], label: "100 XNO" },
 ];
 
 function deriveSecretBytes(seedHex: string, P_w_hex: string, salt: string): Uint8Array {

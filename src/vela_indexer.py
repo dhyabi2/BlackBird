@@ -12,6 +12,7 @@ import functools
 import json
 import os
 import secrets
+import tempfile
 import threading
 import time
 from typing import Dict, List, Optional, Tuple
@@ -23,13 +24,10 @@ from .vela_crypto import pool_pubkey, nano_pubkey_from_address, compute_commitme
 from .poseidon_bridge import poseidon_tree, split32
 from .snarkjs_bridge import generate_proof
 from .nano_rpc import NanoRPC
-from .vela_guardian import FEE_BPS
+from .vela_constants import EPOCH_SECONDS, FEE_BPS, DENOMINATIONS, MERKLE_DEPTH
 
 GUARDIAN_URL = os.environ.get("VELA_GUARDIAN_URL", "http://127.0.0.1:8081")
-
-EPOCH_SECONDS = 86400
-DENOMINATIONS = {10**29, 10**30, 10**31, 10**32}
-MERKLE_DEPTH = 20
+_GUARDIAN_API_KEY = os.environ.get("VELA_API_KEY", "")
 
 
 class PoseidonMerkleTree:
@@ -83,6 +81,7 @@ class VelaIndexer:
                 print("Failed to load state:", e)
 
     def _save_state(self):
+        """Atomically persist state with restricted permissions."""
         with self.lock:
             data = {
                 "commitments": {
@@ -91,8 +90,18 @@ class VelaIndexer:
                 },
                 "nullifiers": [x.hex() for x in self.nullifiers],
             }
-            with open(self._state_path(), "w") as f:
-                json.dump(data, f)
+            fd, tmp = tempfile.mkstemp(dir=self.data_dir, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(data, f)
+                os.chmod(tmp, 0o600)
+                os.replace(tmp, self._state_path())
+            except Exception:
+                try:
+                    os.unlink(tmp)
+                except Exception:
+                    pass
+                raise
 
     def current_epoch(self) -> int:
         return int(time.time()) // EPOCH_SECONDS
@@ -290,7 +299,8 @@ def create_app(indexer: VelaIndexer) -> Flask:
                 "proof": data["proof"],
                 "publicSignals": data["publicSignals"],
             }
-            resp = requests.post(f"{GUARDIAN_URL}/withdraw", json=guardian_req, timeout=30)
+            headers = {"X-VELA-API-Key": _GUARDIAN_API_KEY} if _GUARDIAN_API_KEY else {}
+            resp = requests.post(f"{GUARDIAN_URL}/withdraw", json=guardian_req, headers=headers, timeout=30)
             try:
                 body = resp.json()
             except Exception:
@@ -313,6 +323,9 @@ def create_app(indexer: VelaIndexer) -> Flask:
             epoch = int(data["epoch"])
             if len(n) != 32 or len(t) != 32 or len(P_w) != 32:
                 return jsonify({"error": "n, t, P_w must be 32 bytes"}), 400
+
+            if denomination not in DENOMINATIONS:
+                return jsonify({"error": "unsupported denomination"}), 400
 
             S_pub = pool_pubkey(denomination)
             C = compute_commitment(n, t, P_w, S_pub)
@@ -386,6 +399,7 @@ def create_app(indexer: VelaIndexer) -> Flask:
         return jsonify(p)
 
     @app.route("/submit", methods=["POST"])
+    @require_api_key
     def submit():
         data = request.json or {}
         result = indexer.verify_deposit_commitment_pair(data.get("deposit_hash"), data.get("commit_hash"))
