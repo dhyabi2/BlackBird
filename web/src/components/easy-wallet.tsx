@@ -596,7 +596,7 @@ export default function EasyWallet() {
           <h1 className="text-3xl font-bold">Send XNO Privately</h1>
           <p className="mt-2 text-black/50">Fund, shield, and send XNO without linking sender and receiver.</p>
         </div>
-        <Button variant="ghost" onClick={lock} className="shrink-0">Lock</Button>
+        <Button variant="ghost" onClick={lock} className="shrink-0">Lock Page</Button>
       </div>
 
       <div className="mt-6 flex items-center justify-between">
