@@ -536,15 +536,32 @@ export default function EasyWallet() {
     }
   }
 
-  const depositAmountNano = useMemo(() => {
-    const needed = BigInt(effectiveDenom) + BigInt(1);
-    return nano(needed);
-  }, [effectiveDenom]);
+  const depositAmountRaw = useMemo(
+    () => BigInt(effectiveDenom) + BigInt(1),
+    [effectiveDenom]
+  );
+  const depositAmountText = useMemo(() => nano(depositAmountRaw), [depositAmountRaw]);
 
   const depositUri = useMemo(() => {
     if (!source) return "";
-    return `nano:${source.address}?amount=${depositAmountNano}`;
-  }, [source, depositAmountNano]);
+    // Nano URI amount must be in raw (integer) for wallet apps to auto-fill it.
+    return `nano:${source.address}?amount=${depositAmountRaw.toString()}`;
+  }, [source, depositAmountRaw]);
+
+  function HighlightedAmount({ amount }: { amount: string }) {
+    if (!amount) return null;
+    const last = amount.slice(-1);
+    const rest = amount.slice(0, -1);
+    return (
+      <span className="font-mono font-semibold">
+        {rest}
+        <span className="font-extrabold text-black underline decoration-2 underline-offset-2">
+          {last}
+        </span>
+        {" XNO"}
+      </span>
+    );
+  }
 
   const inputClass =
     "w-full rounded-lg border border-black/20 bg-white px-4 py-2 text-black focus:border-black focus:outline-none";
@@ -695,7 +712,9 @@ export default function EasyWallet() {
           <div className={stepNumClasses(1)}>1</div>
           <div className="flex-1">
             <h2 className="font-semibold">Fund your shield address</h2>
-            <p className="text-sm text-black/50">Send exactly <strong>{depositAmountNano} XNO</strong> to this temporary address.</p>
+            <p className="text-sm text-black/50">
+              Send exactly <HighlightedAmount amount={depositAmountText} /> to this temporary address.
+            </p>
             {greenlight?.ok && source && (
               <div className="mt-4">
                 <div className="flex items-center gap-2">
