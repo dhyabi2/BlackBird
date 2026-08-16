@@ -27,7 +27,15 @@ from .snarkjs_bridge import verify_proof
 from .nano_rpc import NanoRPC
 
 EPOCH_SECONDS = 86400
-WITHDRAW_FEE_RAW = 10**28  # 0.01 XNO
+FEE_BPS = 50  # 0.5% guardian fee
+
+
+def withdraw_fee_for(denomination: int) -> int:
+    """Return the guardian fee in raw for a given denomination.
+
+    Fee is 0.5% (50 basis points) of the denomination, rounded down.
+    """
+    return (denomination * FEE_BPS) // 10_000
 
 
 class VelaGuardian:
@@ -144,7 +152,9 @@ class VelaGuardian:
         balance = int(info["balance"])
         previous = bytes.fromhex(info["frontier"])
         representative = nano_pubkey_from_address(info["representative"])
-        new_balance = balance - (denomination - WITHDRAW_FEE_RAW)
+        fee_raw = withdraw_fee_for(denomination)
+        send_amount = denomination - fee_raw
+        new_balance = balance - send_amount
         if new_balance < 0:
             return {"error": "insufficient pool balance"}
 
@@ -170,7 +180,14 @@ class VelaGuardian:
 
         self.spent_nullifiers.add(N)
         self._save_state()
-        return {"ok": True, "block": block, "block_hash": block_hash.hex(), "nullifier": hex(N)}
+        return {
+            "ok": True,
+            "block": block,
+            "block_hash": block_hash.hex(),
+            "nullifier": hex(N),
+            "fee_raw": fee_raw,
+            "send_amount_raw": send_amount,
+        }
 
 
 def create_app(guardian: VelaGuardian) -> Flask:
@@ -183,6 +200,10 @@ def create_app(guardian: VelaGuardian) -> Flask:
     @app.route("/pool_address")
     def pool_address_route():
         return jsonify({"address": guardian.pool_address})
+
+    @app.route("/fee")
+    def fee_route():
+        return jsonify({"fee_bps": FEE_BPS, "note": "0.5% of denomination"})
 
     @app.route("/withdraw", methods=["POST"])
     def withdraw():
