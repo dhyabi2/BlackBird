@@ -362,7 +362,7 @@ export default function EasyWallet() {
       if (bal < required) {
         const pendingSum = BigInt(pendingRaw ?? "0");
         if (bal + pendingSum < required) {
-          throw new Error(`Send at least ${nano(required)} XNO to your source address first`);
+          throw new Error(`Send at least ${nano(required)} XNO to your shield address first`);
         }
         setStatusMessage("Receiving pending funds...");
         const received = await receivePending(required);
@@ -411,7 +411,7 @@ export default function EasyWallet() {
       log("Indexer accepted deposit.");
       setDepositTx({ depositHash: depositBlock.hash, commitHash: commitBlock.hash });
       setDepositDone(true);
-      setStatusMessage("Waiting for the deposit to be indexed...");
+      setStatusMessage("Waiting for your shield to be indexed...");
       startDepositStatusPolling(C_hex);
     } catch (err) {
       setStatusMessage(null);
@@ -434,8 +434,8 @@ export default function EasyWallet() {
         if (status.indexed) {
           clearInterval(id);
           setWithdrawReady(true);
-          setStatusMessage("Deposit indexed. You can withdraw now.");
-          log(`Deposit indexed at leaf ${status.leaf_index ?? "?"}`);
+          setStatusMessage("Shield complete. You can send now.");
+          log(`Shield indexed at leaf ${status.leaf_index ?? "?"}`);
         } else if (attempts >= maxAttempts) {
           clearInterval(id);
           setStatusMessage("Deposit indexing is taking longer than expected. You can retry later.");
@@ -483,14 +483,14 @@ export default function EasyWallet() {
       setStatusMessage("Computing proof of work...");
       const work = (await apiPost("/api/work", { hash: workHash, difficulty: SEND_THRESHOLD })).work;
       const broadcastRes = (await apiPost("/api/broadcast", { block: { ...withdrawRes.block, work } })) as { hash?: string };
-      log(`Withdrawal broadcasted to ${withdraw.address}`);
+      log(`Private send broadcasted to ${withdraw.address}`);
       setWithdrawTx(broadcastRes.hash ?? withdrawRes.block_hash);
       setLastWithdrawAddress(withdraw.address);
       setWithdrawIndex((i) => i + 1);
       setWithdrawReady(false);
       setDepositDone(false);
       setDepositTx(null);
-      setStatusMessage("Withdrawal complete.");
+      setStatusMessage("Private send complete.");
     } catch (err) {
       setStatusMessage(null);
       log(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
@@ -593,8 +593,8 @@ export default function EasyWallet() {
     <div className="mx-auto max-w-2xl px-4 py-12">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold">Wallet</h1>
-          <p className="mt-2 text-black/50">Fund the source address, deposit, then withdraw privately.</p>
+          <h1 className="text-3xl font-bold">Send XNO Privately</h1>
+          <p className="mt-2 text-black/50">Fund, shield, and send XNO without linking sender and receiver.</p>
         </div>
         <Button variant="ghost" onClick={lock} className="shrink-0">Lock</Button>
       </div>
@@ -657,8 +657,8 @@ export default function EasyWallet() {
         <div className={stepClasses(1)}>
           <div className={stepNumClasses(1)}>1</div>
           <div className="flex-1">
-            <h2 className="font-semibold">Fund your source address</h2>
-            <p className="text-sm text-black/50">Send exactly <strong>{depositAmountNano} XNO</strong> to this address.</p>
+            <h2 className="font-semibold">Fund your shield address</h2>
+            <p className="text-sm text-black/50">Send exactly <strong>{depositAmountNano} XNO</strong> to this temporary address.</p>
             {greenlight?.ok && source && (
               <div className="mt-4">
                 <div className="flex items-center gap-2">
@@ -686,13 +686,13 @@ export default function EasyWallet() {
         <div className={stepClasses(2)}>
           <div className={stepNumClasses(2)}>2</div>
           <div className="flex-1">
-            <h2 className="font-semibold">Deposit into the pool</h2>
+            <h2 className="font-semibold">Shield into the pool</h2>
             <p className="text-sm text-black/50">Move {nano(BigInt(effectiveDenom))} XNO + 1 raw into the privacy pool.</p>
             {hasPending && !depositDone && (
-              <p className="mt-2 text-sm text-black/70">Funding detected — you can deposit now.</p>
+              <p className="mt-2 text-sm text-black/70">Funding detected — you can shield now.</p>
             )}
             <Button onClick={handleDeposit} disabled={busy || !greenlight?.ok || !hasFunds || depositDone} className="mt-4 w-full">
-              {busy ? "Working..." : depositDone ? "Deposited" : "Deposit now"}
+              {busy ? "Working..." : depositDone ? "Shielded" : "Shield now"}
             </Button>
             {depositTx && (
               <div className="mt-3 flex flex-wrap gap-3 text-xs text-black/70">
@@ -706,9 +706,9 @@ export default function EasyWallet() {
         <div className={stepClasses(3)}>
           <div className={stepNumClasses(3)}>3</div>
           <div className="flex-1">
-            <h2 className="font-semibold">Withdraw to a fresh address</h2>
+            <h2 className="font-semibold">Send to a fresh address</h2>
             <p className="text-sm text-black/50">
-              Receive {nano(BigInt(effectiveDenom) - withdrawFeeRaw(BigInt(effectiveDenom), feeBps))} XNO minus the {nano(withdrawFeeRaw(BigInt(effectiveDenom), feeBps))} XNO guardian fee ({(feeBps / 100).toFixed(1)}%).
+              Recipient receives {nano(BigInt(effectiveDenom) - withdrawFeeRaw(BigInt(effectiveDenom), feeBps))} XNO ({(feeBps / 100).toFixed(1)}% guardian fee deducted).
             </p>
             <Button onClick={handleWithdraw} disabled={busy || !withdrawReady} variant="secondary" className="mt-4 w-full">
               {busy ? "Working..." : "Withdraw now"}
