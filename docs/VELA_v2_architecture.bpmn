@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC" xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI" id="VELA_v2_full" targetNamespace="http://vela.protocol" exporter="Kimi Code CLI" exporterVersion="2.0">
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC" xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI" id="VELA_v2_full" targetNamespace="http://vela.protocol" exporter="Kimi Code CLI" exporterVersion="2.1">
   <collaboration id="Collaboration_1">
     <participant id="Participant_Client" name="Client / e2e Harness" processRef="Process_Client"/>
     <participant id="Participant_WebApp" name="Web App (Next.js API proxy)" processRef="Process_WebApp"/>
@@ -50,7 +50,7 @@
       <startEvent id="Start_SubDeposit" name="Begin deposit"/>
       <task id="Task_DeriveStealth" name="Derive stealth withdrawal key P_w from seed[1]"/>
       <task id="Task_GenerateSecrets" name="Derive n = Blake2b(seed|P_w|&quot;vela/n&quot;), t similarly"/>
-      <task id="Task_FetchPoolInfo" name="Fetch pool public key S_pub for denomination"/>
+      <task id="Task_FetchPoolInfo" name="Fetch pool address derived from guardian seed for denomination"/>
       <task id="Task_ComputeCommitment" name="Compute C = Poseidon(1, n, t, P_w, S_pub)"/>
       <task id="Task_CreateDepositBlock" name="Create state send: source → pool (denom)"/>
       <task id="Task_ComputeDepositWork" name="Compute PoW on source frontier (send threshold)"/>
@@ -146,7 +146,7 @@
     <sequenceFlow id="WP1" sourceRef="Start_WebPending" targetRef="Task_ValidatePending"/>
     <sequenceFlow id="WP2" sourceRef="Task_ValidatePending" targetRef="Task_WebCallNanoRPC"/>
     <startEvent id="Start_WebWork" name="POST /api/work"/>
-    <task id="Task_ValidateWork" name="Validate hash &amp; difficulty, rate limit"/>
+    <task id="Task_ValidateWork" name="Validate hash &amp; difficulty, rate limit; reject if RPC returns invalid work (no local fallback)"/>
     <sequenceFlow id="WW1" sourceRef="Start_WebWork" targetRef="Task_ValidateWork"/>
     <sequenceFlow id="WW2" sourceRef="Task_ValidateWork" targetRef="Task_WebCallNanoRPC"/>
     <startEvent id="Start_WebBroadcast" name="POST /api/broadcast"/>
@@ -158,14 +158,14 @@
     <sequenceFlow id="WD1" sourceRef="Start_WebDeposit" targetRef="Task_ValidateDepositReq"/>
     <sequenceFlow id="WD2" sourceRef="Task_ValidateDepositReq" targetRef="Task_WebForwardDeposit"/>
     <startEvent id="Start_WebProve" name="POST /api/prove"/>
-    <task id="Task_ValidateProveReq" name="Validate n, t, P_w, nullifier, denom, epoch"/>
+    <task id="Task_ValidateProveReq" name="Validate n, t, P_w, nullifier, denom, epoch, API key"/>
     <sequenceFlow id="WPr1" sourceRef="Start_WebProve" targetRef="Task_ValidateProveReq"/>
     <sequenceFlow id="WPr2" sourceRef="Task_ValidateProveReq" targetRef="Task_WebForwardProve"/>
     <startEvent id="Start_WebWithdraw" name="POST /api/withdraw"/>
     <task id="Task_ValidateWithdrawReq" name="Validate destination, proof, publicSignals"/>
     <sequenceFlow id="WWi1" sourceRef="Start_WebWithdraw" targetRef="Task_ValidateWithdrawReq"/>
     <sequenceFlow id="WWi2" sourceRef="Task_ValidateWithdrawReq" targetRef="Task_WebForwardWithdraw"/>
-    <task id="Task_WebCallNanoRPC" name="Proxy to Nano RPC (account_info, pending, work_generate, process)"/>
+    <task id="Task_WebCallNanoRPC" name="Proxy only to rpc.nano.to (account_info, pending, work_generate, process); no fallback endpoints"/>
     <task id="Task_WebForwardDeposit" name="Forward to VELA Indexer /api/deposit"/>
     <task id="Task_WebForwardProve" name="Forward to VELA Indexer /api/prove"/>
     <task id="Task_WebForwardWithdraw" name="Forward to VELA Guardian /withdraw"/>
@@ -198,7 +198,7 @@
     <exclusiveGateway id="Gateway_RPCAction" name="Action?"/>
     <task id="Task_RPCAccountInfo" name="account_info"/>
     <task id="Task_RPCPending" name="pending / receivable"/>
-    <task id="Task_RPCWorkGenerate" name="work_generate (send/receive difficulty)"/>
+    <task id="Task_RPCWorkGenerate" name="work_generate for requested difficulty threshold"/>
     <task id="Task_RPCProcess" name="process (broadcast block)"/>
     <task id="Task_RPCBlocksInfo" name="blocks_info"/>
     <task id="Task_RPCReturn" name="Return JSON result"/>
@@ -279,13 +279,13 @@
     <task id="Task_QueryConfirmedBlocks" name="Query account_history for pool addresses"/>
     <task id="Task_FilterSendsToPool" name="Filter sends matching allowed denominations"/>
     <task id="Task_IndexerBlocksInfo" name="blocks_info(deposit_hash, commit_hash)"/>
-    <task id="Task_ValidatePair" name="Validate: same source, amount in DENOMINATIONS, link == pool_pubkey, commitment link 32 bytes"/>
+    <task id="Task_ValidatePair" name="Validate: state blocks, confirmed, same source, amount in DENOMINATIONS, deposit link == pool_pubkey, commit previous == deposit hash, commit amount == 1 raw, C 32 bytes"/>
     <exclusiveGateway id="Gateway_PairValid" name="Valid pair?"/>
     <task id="Task_ComputeEpoch" name="Compute epoch = local_timestamp // 86400"/>
     <task id="Task_ComputeLeaf" name="leaf = Poseidon(C, 0)"/>
     <task id="Task_InsertTree" name="Insert into per-epoch/denom Merkle tree (depth 20)"/>
     <task id="Task_ComputeRoot" name="Compute deterministic root"/>
-    <task id="Task_PersistIndexerState" name="Persist commitments to indexer_state.json"/>
+    <task id="Task_PersistIndexerState" name="Atomic write of indexer_state.json with 0o600 permissions"/>
     <task id="Task_PublishRootAPI" name="Expose /root/{epoch}/{denom} and /status"/>
     <endEvent id="End_IndexerScanOK" name="Root updated"/>
     <endEvent id="End_IndexerScanReject" name="Invalid pair ignored"/>
@@ -303,7 +303,7 @@
     <sequenceFlow id="IS11" sourceRef="Task_PersistIndexerState" targetRef="Task_PublishRootAPI"/>
     <sequenceFlow id="IS12" sourceRef="Task_PublishRootAPI" targetRef="End_IndexerScanOK"/>
     <startEvent id="Start_IndexerDeposit" name="POST /api/deposit"/>
-    <task id="Task_IndexerDepositVerify" name="verify_deposit_commitment_pair()"/>
+    <task id="Task_IndexerDepositVerify" name="require_api_key + verify_deposit_commitment_pair()"/>
     <exclusiveGateway id="Gateway_DepositKnown" name="Pair valid?"/>
     <task id="Task_IndexerDepositAdd" name="add_commitment(epoch, denom, C)"/>
     <endEvent id="End_IndexerDepositOK" name="Return {ok, commitment, epoch}"/>
@@ -351,7 +351,7 @@
       </lane>
     </laneSet>
     <startEvent id="Start_GuardianWithdraw" name="POST /withdraw"/>
-    <task id="Task_ParseRequest" name="Parse epoch, denom, P_w, nullifier, proof, publicSignals"/>
+    <task id="Task_ParseRequest" name="require_api_key + parse epoch, denom, P_w, nullifier, proof, publicSignals"/>
     <task id="Task_VerifyPublicSignals" name="Check publicSignals[1]==nullifier, [2,3]==P_w limbs"/>
     <exclusiveGateway id="Gateway_PublicSignalsOK" name="Signals match?"/>
     <task id="Task_FetchIndexerRoot" name="GET /root/{epoch}/{denom} from indexer"/>
@@ -361,11 +361,11 @@
     <task id="Task_VerifyZKProof" name="snarkjs verify(proof, publicSignals)"/>
     <exclusiveGateway id="Gateway_ProofValid" name="Proof valid?"/>
     <task id="Task_GuardianAccountInfo" name="Get pool account_info (frontier, balance, rep)"/>
-    <task id="Task_ComputeNewBalance" name="new_balance = balance - (denom - 0.01 XNO fee)"/>
+    <task id="Task_ComputeNewBalance" name="new_balance = balance - (denom - 0.5% fee)"/>
     <task id="Task_HashBlock" name="block_hash = Blake2b(32-byte preamble|account|previous|rep|balance|link=P_w)"/>
     <task id="Task_SignBlock" name="Sign block_hash with pool Ed25519-blake2b key"/>
-    <task id="Task_MarkNullifier" name="Add nullifier to spent set"/>
-    <task id="Task_PersistGuardianState" name="Persist guardian_state.json"/>
+    <task id="Task_MarkNullifier" name="Add nullifier to spent set under threading.Lock"/>
+    <task id="Task_PersistGuardianState" name="Atomic write of guardian_state.json with 0o600 permissions"/>
     <task id="Task_ReturnBlock" name="Return {block, block_hash, nullifier}"/>
     <task id="Task_RejectRequest" name="Return {error: verification failed}"/>
     <endEvent id="End_GuardianSigned" name="Signed block returned"/>

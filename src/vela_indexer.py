@@ -162,6 +162,14 @@ class VelaIndexer:
             dep_block = dep.get("contents", dep)
             com_block = com.get("contents", com)
 
+            # Both must be state blocks (not legacy open/send/receive).
+            if dep_block.get("type") != "state" or com_block.get("type") != "state":
+                return None
+
+            # Require on-chain confirmation before trusting block data.
+            if dep.get("confirmed") != "true" or com.get("confirmed") != "true":
+                return None
+
             if dep_block.get("account") != com_block.get("account"):
                 return None
 
@@ -170,6 +178,14 @@ class VelaIndexer:
                 return None
 
             if dep_block.get("link", "").lower() != pool_pubkey(amount_raw).hex().lower():
+                return None
+
+            # The commitment block must chain directly from the deposit block.
+            if com_block.get("previous", "").lower() != deposit_hash.lower():
+                return None
+
+            # Commitment block sends exactly 1 raw to the commitment hash.
+            if int(com.get("amount", 0)) != 1:
                 return None
 
             C_bytes = bytes.fromhex(com_block.get("link", ""))
