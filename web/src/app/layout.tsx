@@ -26,11 +26,11 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-zinc-950 text-zinc-100">
+      <body className="min-h-full flex flex-col bg-white text-black">
         <WarningBanner />
         <Nav />
         <main className="flex-1">{children}</main>
-        <footer className="border-t border-zinc-800 py-6 text-center text-sm text-zinc-500">
+        <footer className="border-t border-black/10 py-6 text-center text-sm text-black/50">
           VELA v2 — unaudited prototype. Use at your own risk.
         </footer>
       </body>

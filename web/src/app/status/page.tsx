@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/Button";
 
 export default function StatusPage() {
   const [health, setHealth] = useState<unknown>(null);
@@ -52,15 +53,11 @@ export default function StatusPage() {
             value={account}
             onChange={(e) => setAccount(e.target.value)}
             placeholder="nano_..."
-            className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-zinc-100 focus:border-emerald-500 focus:outline-none"
+            className="flex-1 rounded-lg border border-black/20 bg-white px-4 py-2 text-black focus:border-black focus:outline-none"
           />
-          <button
-            type="submit"
-            disabled={loading}
-            className="rounded-lg bg-emerald-500 px-4 py-2 font-semibold text-zinc-950 hover:bg-emerald-400 disabled:opacity-50"
-          >
+          <Button type="submit" disabled={loading}>
             Lookup
-          </button>
+          </Button>
         </div>
         {balance ? <StatusCard title="Balance" data={balance} /> : null}
       </form>
@@ -70,9 +67,9 @@ export default function StatusPage() {
 
 function StatusCard({ title, data }: { title: string; data: unknown }) {
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-6">
-      <h3 className="text-lg font-semibold text-emerald-400">{title}</h3>
-      <pre className="mt-4 overflow-x-auto rounded-lg bg-zinc-950 p-4 text-xs text-zinc-300">
+    <div className="rounded-xl border border-black/10 bg-white p-6">
+      <h3 className="text-lg font-semibold text-black">{title}</h3>
+      <pre className="mt-4 overflow-x-auto rounded-lg bg-black/5 p-4 text-xs text-black/70">
         {JSON.stringify(data, null, 2) as string}
       </pre>
     </div>

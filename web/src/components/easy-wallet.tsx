@@ -9,6 +9,7 @@ import { createBackupPhrase, phraseToSeedHex } from "@/lib/mnemonic";
 import { computeCommitment, computeNullifier, hexToBytes, bytesToHex } from "@/lib/vela-crypto";
 import { blake2b } from "blakejs";
 import { convert, Unit } from "nanocurrency";
+import { Button } from "@/components/ui/Button";
 
 const STORAGE_KEY = "vela_wallet_v1";
 
@@ -184,7 +185,6 @@ export default function EasyWallet() {
       const C_hex = C.toString(16).padStart(64, "0");
       log(`Commitment: ${C_hex.slice(0, 16)}...`);
 
-      // Deposit block
       const depositBlock = buildSendBlock(source.secretKey, {
         previous: sourceInfo.frontier!,
         representative: sourceInfo.representative!,
@@ -196,7 +196,6 @@ export default function EasyWallet() {
       await apiPost("/api/broadcast", { block: depositBlock.block });
       log("Deposit broadcasted");
 
-      // Commit block
       const commitBlock = buildSendBlock(source.secretKey, {
         previous: depositBlock.hash,
         representative: sourceInfo.representative!,
@@ -251,7 +250,9 @@ export default function EasyWallet() {
       });
       if (!withdrawRes.block || !withdrawRes.block_hash) throw new Error("Guardian did not return a block");
 
-      const work = (await apiPost("/api/work", { hash: withdrawRes.block_hash, difficulty: "fffffff800000000" })).work;
+      // PoW must be computed on the pool frontier (the block's previous field), not the block hash.
+      const workHash = typeof withdrawRes.block.previous === "string" ? withdrawRes.block.previous : withdrawRes.block_hash;
+      const work = (await apiPost("/api/work", { hash: workHash, difficulty: "fffffff800000000" })).work;
       await apiPost("/api/broadcast", { block: { ...withdrawRes.block, work } });
       log(`Withdrawal broadcasted to ${withdraw.address}`);
       setLastWithdrawAddress(withdraw.address);
@@ -273,38 +274,38 @@ export default function EasyWallet() {
     return `nano:${source.address}?amount=${depositAmountNano}`;
   }, [source, depositAmountNano]);
 
+  const inputClass =
+    "w-full rounded-lg border border-black/20 bg-white px-4 py-2 text-black focus:border-black focus:outline-none";
+
   if (view === "create") {
     return (
       <div className="mx-auto max-w-md px-4 py-16">
         <h1 className="text-3xl font-bold">Create wallet</h1>
-        <p className="mt-2 text-zinc-400">
+        <p className="mt-2 text-black/50">
           Set a password to encrypt your wallet in this browser.
         </p>
-        {error && <p className="mt-4 text-red-400">{error}</p>}
+        {error && <p className="mt-4 text-black">{error}</p>}
         <div className="mt-6 space-y-4">
           <input
             type="password"
             placeholder="Password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-zinc-100"
+            className={inputClass}
           />
           <input
             type="password"
             placeholder="Confirm password"
             value={passwordConfirm}
             onChange={(e) => setPasswordConfirm(e.target.value)}
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-zinc-100"
+            className={inputClass}
           />
-          <button
-            onClick={handleCreate}
-            className="w-full rounded-lg bg-emerald-500 px-4 py-3 font-semibold text-zinc-950 hover:bg-emerald-400"
-          >
+          <Button onClick={handleCreate} className="w-full">
             Create encrypted wallet
-          </button>
+          </Button>
           <button
             onClick={() => setView("restore")}
-            className="w-full text-sm text-zinc-500 hover:text-zinc-300"
+            className="w-full text-sm text-black/50 hover:text-black"
           >
             Restore from phrase
           </button>
@@ -317,30 +318,27 @@ export default function EasyWallet() {
     return (
       <div className="mx-auto max-w-md px-4 py-16">
         <h1 className="text-3xl font-bold">Restore wallet</h1>
-        <p className="mt-2 text-zinc-400">Enter your 24-word recovery phrase.</p>
-        {error && <p className="mt-4 text-red-400">{error}</p>}
+        <p className="mt-2 text-black/50">Enter your 24-word recovery phrase.</p>
+        {error && <p className="mt-4 text-black">{error}</p>}
         <div className="mt-6 space-y-4">
           <textarea
             value={phrase}
             onChange={(e) => setPhrase(e.target.value)}
             placeholder="abandon abandon ability ..."
             rows={4}
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-zinc-100"
+            className={inputClass}
           />
           <input
             type="password"
             placeholder="New password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-zinc-100"
+            className={inputClass}
           />
-          <button
-            onClick={handleRestore}
-            className="w-full rounded-lg bg-emerald-500 px-4 py-3 font-semibold text-zinc-950 hover:bg-emerald-400"
-          >
+          <Button onClick={handleRestore} className="w-full">
             Restore
-          </button>
-          <button onClick={() => setView("create")} className="w-full text-sm text-zinc-500 hover:text-zinc-300">
+          </Button>
+          <button onClick={() => setView("create")} className="w-full text-sm text-black/50 hover:text-black">
             Create new wallet
           </button>
         </div>
@@ -352,22 +350,19 @@ export default function EasyWallet() {
     return (
       <div className="mx-auto max-w-md px-4 py-16">
         <h1 className="text-3xl font-bold">Unlock wallet</h1>
-        {error && <p className="mt-4 text-red-400">{error}</p>}
+        {error && <p className="mt-4 text-black">{error}</p>}
         <div className="mt-6 space-y-4">
           <input
             type="password"
             placeholder="Password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-zinc-100"
+            className={inputClass}
           />
-          <button
-            onClick={handleUnlock}
-            className="w-full rounded-lg bg-emerald-500 px-4 py-3 font-semibold text-zinc-950 hover:bg-emerald-400"
-          >
+          <Button onClick={handleUnlock} className="w-full">
             Unlock
-          </button>
-          <button onClick={() => setView("restore")} className="w-full text-sm text-zinc-500 hover:text-zinc-300">
+          </Button>
+          <button onClick={() => setView("restore")} className="w-full text-sm text-black/50 hover:text-black">
             Restore from phrase
           </button>
         </div>
@@ -378,20 +373,20 @@ export default function EasyWallet() {
   return (
     <div className="mx-auto max-w-2xl px-4 py-12">
       <h1 className="text-3xl font-bold">Easy Wallet</h1>
-      <p className="mt-2 text-zinc-400">
-        Source: <span className="font-mono text-emerald-400">{source?.address}</span>
+      <p className="mt-2 text-black/50">
+        Source: <span className="font-mono text-black">{source?.address}</span>
       </p>
-      <p className="text-sm text-zinc-500">
+      <p className="text-sm text-black/50">
         Balance: {balance ? `${rawToNano(balance)} XNO` : "—"}
       </p>
 
-      <div className="mt-8 rounded-xl border border-zinc-800 bg-zinc-900/50 p-6">
+      <div className="mt-8 rounded-xl border border-black/10 bg-white p-6">
         <h2 className="text-xl font-semibold">1. Deposit</h2>
-        <label className="mt-4 block text-sm font-medium text-zinc-300">Amount</label>
+        <label className="mt-4 block text-sm font-medium text-black/70">Amount</label>
         <select
           value={denomRaw}
           onChange={(e) => setDenomRaw(e.target.value)}
-          className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-2 text-zinc-100"
+          className={inputClass}
         >
           {DENOMINATIONS.map((d) => (
             <option key={d.raw} value={d.raw}>{d.label}</option>
@@ -399,64 +394,65 @@ export default function EasyWallet() {
         </select>
 
         <div className="mt-6">
-          <p className="text-sm text-zinc-300">
+          <p className="text-sm text-black/70">
             Send <strong>at least {depositAmountNano} XNO</strong> to your source address.
           </p>
-          <p className="mt-1 text-xs text-zinc-400">
+          <p className="mt-1 text-xs text-black/50">
             {rawToNano(denomRaw)} XNO goes into the pool and 1 raw is used for the commitment
             block. Anything extra stays in your source address.
           </p>
-          <div className="mt-3 flex flex-col items-center gap-3 rounded-lg bg-white p-4">
+          <div className="mt-3 flex flex-col items-center gap-3 rounded-lg border border-black/10 bg-white p-4">
             {depositUri && <QRCodeSVG value={depositUri} size={180} />}
-            <code className="text-xs text-zinc-900 break-all">{source?.address}</code>
+            <code className="text-xs text-black break-all">{source?.address}</code>
           </div>
-          <p className="mt-2 text-xs text-zinc-500">
+          <p className="mt-2 text-xs text-black/50">
             Or use this URI in a Nano wallet: <code className="break-all">{depositUri}</code>
           </p>
         </div>
 
-        <button
+        <Button
           onClick={handleCompleteDeposit}
           disabled={busy || !balance || BigInt(balance) < BigInt(denomRaw) + BigInt(1)}
-          className="mt-6 w-full rounded-lg bg-emerald-500 px-4 py-3 font-semibold text-zinc-950 hover:bg-emerald-400 disabled:opacity-50"
+          className="mt-6 w-full"
         >
           {busy ? "Working..." : "Complete deposit"}
-        </button>
+        </Button>
       </div>
 
-      <div className="mt-6 rounded-xl border border-zinc-800 bg-zinc-900/50 p-6">
+      <div className="mt-6 rounded-xl border border-black/10 bg-white p-6">
         <h2 className="text-xl font-semibold">2. Withdraw</h2>
-        <p className="mt-2 text-sm text-zinc-400">
+        <p className="mt-2 text-sm text-black/50">
           After the deposit is indexed, withdraw to a fresh address.
         </p>
-        <button
+        <Button
           onClick={handleWithdraw}
           disabled={busy}
-          className="mt-4 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3 font-semibold hover:border-zinc-500 disabled:opacity-50"
+          variant="secondary"
+          className="mt-4 w-full"
         >
           {busy ? "Working..." : "Withdraw"}
-        </button>
+        </Button>
         {lastWithdrawAddress && (
-          <p className="mt-4 text-sm text-emerald-400">
+          <p className="mt-4 text-sm text-black">
             Last withdrawal: <span className="font-mono">{lastWithdrawAddress}</span>
           </p>
         )}
       </div>
 
       {phrase && (
-        <div className="mt-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-6">
-          <h3 className="font-semibold text-amber-200">Recovery phrase</h3>
-          <p className="mt-1 text-sm text-amber-200/80">
+        <div className="mt-6 rounded-xl border border-black/10 bg-black/5 p-6">
+          <h3 className="font-semibold text-black">Recovery phrase</h3>
+          <p className="mt-1 text-sm text-black/60">
             Save these 24 words. They are the only way to recover this wallet.
           </p>
-          <p className="mt-3 font-mono text-sm text-amber-100">{phrase}</p>
+          <p className="mt-3 font-mono text-sm text-black">{phrase}</p>
         </div>
       )}
 
       {logs.length > 0 && (
-        <div className="mt-8 rounded-xl border border-zinc-800 bg-zinc-950 p-6">
+        <div className="mt-8 rounded-xl border border-black/10 bg-black/5 p-6">
           <h2 className="mb-4 text-lg font-semibold">Activity log</h2>
-          <pre className="max-h-64 overflow-auto font-mono text-xs text-zinc-300">
+          <pre className="max-h-64 overflow-auto font-mono text-xs text-black/70">
             {logs.join("\n")}
           </pre>
         </div>

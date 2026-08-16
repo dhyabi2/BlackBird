@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { deriveLegacyAccount, buildSendBlock } from "@/lib/wallet";
 import { computeCommitment, computeNullifier, hexToBytes, bytesToHex } from "@/lib/vela-crypto";
 import { blake2b } from "blakejs";
+import { Button } from "@/components/ui/Button";
 
 const DENOMINATIONS = [
   { raw: "100000000000000000000000000000", label: "0.1 XNO" },
@@ -131,7 +132,6 @@ export default function WalletPage() {
         throw new Error(`Insufficient balance: ${balance} raw`);
       }
 
-      // Deposit block
       const depositBlock = buildSendBlock(source.secretKey, {
         previous: info.frontier,
         representative: info.representative,
@@ -143,7 +143,6 @@ export default function WalletPage() {
       await broadcastBlock(depositBlock.block);
       log("Deposit broadcasted");
 
-      // Commitment block (1 raw to pool with link = commitment)
       const commitBlock = buildSendBlock(source.secretKey, {
         previous: depositBlock.hash,
         representative: info.representative,
@@ -155,10 +154,10 @@ export default function WalletPage() {
       await broadcastBlock(commitBlock.block);
       log("Commitment broadcasted");
 
-      const depositRes = await apiPost("/api/deposit", {
+      const depositRes = (await apiPost("/api/deposit", {
         deposit_hash: depositBlock.hash,
         commit_hash: commitBlock.hash,
-      }) as { commitment?: string };
+      })) as { commitment?: string };
       log(`Indexer accepted commitment: ${depositRes.commitment}`);
     } catch (err) {
       log(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
@@ -202,14 +201,20 @@ export default function WalletPage() {
         nullifier: nullifier.toString(16),
         proof: proofRes.proof,
         publicSignals: proofRes.publicSignals,
-      })) as { ok?: boolean; block_hash?: string; block?: Record<string, unknown> };
+      })) as {
+        ok?: boolean;
+        block_hash?: string;
+        block?: { previous?: string } & Record<string, unknown>;
+      };
 
       if (!withdrawRes.block || !withdrawRes.block_hash) {
         throw new Error("Guardian did not return a block");
       }
       log(`Guardian signed withdrawal: ${withdrawRes.block_hash}`);
 
-      const work = await fetchWork(withdrawRes.block_hash);
+      // PoW for a state-block send must be computed on the previous block hash (pool frontier).
+      const workHash = withdrawRes.block.previous ?? withdrawRes.block_hash;
+      const work = await fetchWork(workHash);
       const signedBlock = { ...withdrawRes.block, work };
       await broadcastBlock(signedBlock);
       log("Withdrawal broadcasted");
@@ -220,17 +225,20 @@ export default function WalletPage() {
     }
   }
 
+  const inputClass =
+    "w-full rounded-lg border border-black/20 bg-white px-4 py-2 text-black focus:border-black focus:outline-none";
+
   return (
     <div className="mx-auto max-w-3xl px-4 py-12">
       <h1 className="text-3xl font-bold">Wallet</h1>
-      <p className="mt-2 text-zinc-400">
+      <p className="mt-2 text-black/50">
         Client-side wallet. Your seed never leaves the browser. Generate a
         deposit, wait for it to be indexed, then withdraw.
       </p>
 
-      <div className="mt-8 space-y-6 rounded-xl border border-zinc-800 bg-zinc-900/50 p-6">
+      <div className="mt-8 space-y-6 rounded-xl border border-black/10 bg-white p-6">
         <div>
-          <label className="block text-sm font-medium text-zinc-300">
+          <label className="block text-sm font-medium text-black/70">
             Source seed (32-byte hex)
           </label>
           <input
@@ -238,38 +246,38 @@ export default function WalletPage() {
             value={seed}
             onChange={(e) => setSeed(e.target.value)}
             placeholder="0000..."
-            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-2 font-mono text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none"
+            className={inputClass}
           />
-          <p className="mt-1 text-xs text-zinc-500">
+          <p className="mt-1 text-xs text-black/50">
             Same 64-character hex seed used by the VELA CLI.
           </p>
         </div>
 
         <div className="grid grid-cols-3 gap-4">
           <div>
-            <label className="block text-sm font-medium text-zinc-300">Source index</label>
+            <label className="block text-sm font-medium text-black/70">Source index</label>
             <input
               type="number"
               value={sourceIndex}
               onChange={(e) => setSourceIndex(Number(e.target.value))}
-              className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-2 text-zinc-100"
+              className={inputClass}
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-zinc-300">Withdraw index</label>
+            <label className="block text-sm font-medium text-black/70">Withdraw index</label>
             <input
               type="number"
               value={withdrawIndex}
               onChange={(e) => setWithdrawIndex(Number(e.target.value))}
-              className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-2 text-zinc-100"
+              className={inputClass}
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-zinc-300">Denomination</label>
+            <label className="block text-sm font-medium text-black/70">Denomination</label>
             <select
               value={denomRaw}
               onChange={(e) => setDenomRaw(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-2 text-zinc-100"
+              className={inputClass}
             >
               {DENOMINATIONS.map((d) => (
                 <option key={d.raw} value={d.raw}>
@@ -281,38 +289,39 @@ export default function WalletPage() {
         </div>
 
         {source && (
-          <div className="text-sm text-zinc-400">
-            Source: <span className="font-mono text-emerald-400">{source.address}</span>
+          <div className="text-sm text-black/50">
+            Source: <span className="font-mono text-black">{source.address}</span>
           </div>
         )}
         {withdraw && (
-          <div className="text-sm text-zinc-400">
-            Withdraw: <span className="font-mono text-emerald-400">{withdraw.address}</span>
+          <div className="text-sm text-black/50">
+            Withdraw: <span className="font-mono text-black">{withdraw.address}</span>
           </div>
         )}
 
         <div className="flex gap-4">
-          <button
+          <Button
             onClick={handleDeposit}
             disabled={busy || !source || !withdraw}
-            className="flex-1 rounded-lg bg-emerald-500 px-4 py-3 font-semibold text-zinc-950 hover:bg-emerald-400 disabled:opacity-50"
+            className="flex-1"
           >
             {busy ? "Working..." : "1. Deposit"}
-          </button>
-          <button
+          </Button>
+          <Button
             onClick={handleWithdraw}
             disabled={busy || !source || !withdraw}
-            className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-3 font-semibold hover:border-zinc-500 disabled:opacity-50"
+            variant="secondary"
+            className="flex-1"
           >
             {busy ? "Working..." : "2. Withdraw"}
-          </button>
+          </Button>
         </div>
       </div>
 
       {logs.length > 0 && (
-        <div className="mt-8 rounded-xl border border-zinc-800 bg-zinc-950 p-6">
+        <div className="mt-8 rounded-xl border border-black/10 bg-black/5 p-6">
           <h2 className="mb-4 text-lg font-semibold">Activity log</h2>
-          <pre className="max-h-96 overflow-auto font-mono text-xs text-zinc-300">
+          <pre className="max-h-96 overflow-auto font-mono text-xs text-black/70">
             {logs.join("\n")}
           </pre>
         </div>

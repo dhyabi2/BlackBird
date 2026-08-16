@@ -7,12 +7,12 @@ export function WarningBanner() {
   if (dismissed) return null;
 
   return (
-    <div className="bg-amber-500/10 px-4 py-3 text-center text-sm text-amber-200">
+    <div className="border-b border-black/10 bg-white px-4 py-3 text-center text-sm text-black">
       <span className="font-semibold">Warning:</span> This is an unaudited
       prototype. Do not deposit mainnet funds you cannot afford to lose.
       <button
         onClick={() => setDismissed(true)}
-        className="ml-4 text-amber-400 underline hover:text-amber-300"
+        className="ml-4 underline hover:text-black/60"
       >
         Dismiss
       </button>

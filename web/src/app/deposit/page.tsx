@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Button } from "@/components/ui/Button";
 
 export default function DepositPage() {
   const [depositHash, setDepositHash] = useState("");
@@ -36,17 +37,20 @@ export default function DepositPage() {
     }
   }
 
+  const inputClass =
+    "w-full rounded-lg border border-black/20 bg-white px-4 py-2 text-black focus:border-black focus:outline-none";
+
   return (
     <div className="mx-auto max-w-2xl px-4 py-12">
       <h1 className="text-3xl font-bold">Deposit</h1>
-      <p className="mt-2 text-zinc-400">
+      <p className="mt-2 text-black/50">
         Submit the deposit block hash and the commitment block hash. The indexer
         will verify the pair and add the commitment to the pool.
       </p>
 
       <form onSubmit={handleSubmit} className="mt-8 space-y-6">
         <div>
-          <label className="block text-sm font-medium text-zinc-300">
+          <label className="block text-sm font-medium text-black/70">
             Deposit block hash
           </label>
           <input
@@ -55,12 +59,12 @@ export default function DepositPage() {
             value={depositHash}
             onChange={(e) => setDepositHash(e.target.value)}
             placeholder="ABC123..."
-            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-zinc-100 focus:border-emerald-500 focus:outline-none"
+            className={inputClass}
           />
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-zinc-300">
+          <label className="block text-sm font-medium text-black/70">
             Commitment block hash
           </label>
           <input
@@ -69,24 +73,20 @@ export default function DepositPage() {
             value={commitHash}
             onChange={(e) => setCommitHash(e.target.value)}
             placeholder="DEF456..."
-            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-zinc-100 focus:border-emerald-500 focus:outline-none"
+            className={inputClass}
           />
         </div>
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full rounded-lg bg-emerald-500 px-4 py-3 font-semibold text-zinc-950 hover:bg-emerald-400 disabled:opacity-50"
-        >
+        <Button type="submit" disabled={loading} className="w-full">
           {loading ? "Submitting..." : "Submit deposit"}
-        </button>
+        </Button>
 
         {result && (
           <div
-            className={`rounded-lg px-4 py-3 text-sm ${
+            className={`rounded-lg border px-4 py-3 text-sm ${
               result.ok
-                ? "bg-emerald-500/10 text-emerald-200"
-                : "bg-red-500/10 text-red-200"
+                ? "border-black/10 bg-black/5 text-black"
+                : "border-black/10 bg-black/5 text-black"
             }`}
           >
             {result.message}

@@ -1,6 +1,18 @@
 import type { NextConfig } from "next";
 import path from "path";
 
+function getBackendOrigin(): string {
+  const url = process.env.VELA_BACKEND_URL;
+  if (!url) return "";
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "";
+  }
+}
+
+const backendOrigin = getBackendOrigin();
+
 const securityHeaders = [
   {
     key: "Strict-Transport-Security",
@@ -24,8 +36,18 @@ const securityHeaders = [
   },
   {
     key: "Content-Security-Policy",
-    value:
-      "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://rpc.nano.to https://*.upstash.io; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';",
+    value: [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-eval' 'unsafe-inline'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data:",
+      `connect-src 'self' ${backendOrigin} https://rpc.nano.to https://*.upstash.io`,
+      "font-src 'self'",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+    ].join("; ") + ";",
   },
 ];
 

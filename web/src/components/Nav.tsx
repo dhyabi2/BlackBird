@@ -15,18 +15,18 @@ export function Nav() {
   const pathname = usePathname();
 
   return (
-    <nav className="border-b border-zinc-800 bg-zinc-900/50 backdrop-blur">
+    <nav className="border-b border-black/10 bg-white">
       <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-4">
         <Link href="/" className="text-xl font-bold tracking-tight">
-          VELA <span className="text-emerald-400">v2</span>
+          VELA v2
         </Link>
         <ul className="flex gap-6 text-sm font-medium">
           {links.map((link) => (
             <li key={link.href}>
               <Link
                 href={link.href}
-                className={`transition-colors hover:text-emerald-400 ${
-                  pathname === link.href ? "text-emerald-400" : "text-zinc-400"
+                className={`transition-colors hover:text-black ${
+                  pathname === link.href ? "text-black" : "text-black/50"
                 }`}
               >
                 {link.label}
