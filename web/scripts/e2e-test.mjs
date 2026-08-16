@@ -4,10 +4,11 @@ import * as nano from "nanocurrency";
 import { poseidon9, poseidon3 } from "poseidon-lite";
 import { blake2b } from "blakejs";
 import { fileURLToPath } from "url";
+import { loadTestWallets, encryptWallets, hasEncryptedStore } from "./wallet-store.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
-const WALLETS_FILE = path.join(ROOT, "test-wallets.json");
+const WALLETS_FILE = path.join(ROOT, "test-wallets.json.enc");
 const BASE_URL = process.env.VELA_BASE_URL || "https://velav2-web.vercel.app";
 const ZERO_HASH = "0".repeat(64);
 
@@ -139,14 +140,18 @@ function sleep(ms) {
 }
 
 function loadWallets() {
-  if (!fs.existsSync(WALLETS_FILE)) {
-    throw new Error(`No wallets file. Run: node scripts/e2e-test.mjs init`);
+  if (!hasEncryptedStore()) {
+    throw new Error(`No encrypted wallets file. Run: node scripts/e2e-test.mjs init`);
   }
-  return JSON.parse(fs.readFileSync(WALLETS_FILE, "utf8"));
+  return loadTestWallets();
 }
 
 function saveWallets(wallets) {
-  fs.writeFileSync(WALLETS_FILE, JSON.stringify(wallets, null, 2));
+  const password = process.env.VELA_TEST_WALLET_PASSWORD;
+  if (!password) {
+    throw new Error("VELA_TEST_WALLET_PASSWORD is required to save wallets");
+  }
+  fs.writeFileSync(WALLETS_FILE, encryptWallets(wallets, password));
 }
 
 async function cmdInit() {
@@ -166,7 +171,8 @@ async function cmdInit() {
   console.log(funding.address);
   console.log("\nReceiver addresses (10 x 0.1 XNO will be sent here):");
   receivers.forEach((r, i) => console.log(`${i + 1}. ${r.address}`));
-  console.log(`\nSaved to ${WALLETS_FILE}`);
+  console.log(`\nSaved encrypted wallets to ${WALLETS_FILE}`);
+  console.log("Set VELA_TEST_WALLET_PASSWORD in your environment to decrypt them.");
 }
 
 async function cmdReceiveFunding() {
