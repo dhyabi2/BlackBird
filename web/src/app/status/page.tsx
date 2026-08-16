@@ -38,7 +38,7 @@ export default function StatusPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-12">
-      <h1 className="text-3xl font-bold">Network status</h1>
+      <h1 className="text-2xl font-bold sm:text-3xl">Network status</h1>
 
       <div className="mt-8 grid gap-6">
         <StatusCard title="Vercel / RPC health" data={health} />

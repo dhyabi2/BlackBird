@@ -597,9 +597,9 @@ export default function EasyWallet() {
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-12">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold">Send XNO Privately</h1>
+          <h1 className="text-2xl font-bold sm:text-3xl">Send XNO Privately</h1>
           <p className="mt-2 text-black/50">Fund, shield, and send XNO without linking sender and receiver.</p>
         </div>
         <Button variant="ghost" onClick={lock} className="shrink-0">Lock Page</Button>
@@ -737,7 +737,7 @@ export default function EasyWallet() {
         <div className="mt-8 rounded-xl border border-black/10 bg-black/5 p-5">
           <h3 className="font-semibold">Recovery phrase</h3>
           <p className="mt-1 text-sm text-black/60">Save these 12 words. They are the only way to recover this wallet.</p>
-          <p className="mt-3 font-mono text-sm text-black">{phrase}</p>
+          <p className="mt-3 break-words font-mono text-sm text-black">{phrase}</p>
         </div>
       )}
 
