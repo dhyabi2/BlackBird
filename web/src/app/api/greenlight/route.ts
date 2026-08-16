@@ -13,10 +13,10 @@ export async function GET() {
     const env = getEnv();
 
     // Check Nano RPC is live and returning recent data.
-    const nanoHealth = await nanoRpcCall<{ node_vendor?: string; block_count?: string }>(
+    const nanoHealth = await nanoRpcCall<{ node_vendor?: string; count?: string }>(
       "block_count"
     );
-    if (!nanoHealth.block_count || BigInt(nanoHealth.block_count) < 1) {
+    if (!nanoHealth.count || BigInt(nanoHealth.count) < 1) {
       throw new Error("Nano RPC is not returning a valid block count");
     }
 
@@ -45,7 +45,7 @@ export async function GET() {
       ok: true,
       nano: {
         reachable: true,
-        block_count: nanoHealth.block_count,
+        block_count: nanoHealth.count,
       },
       backend: {
         reachable: true,
