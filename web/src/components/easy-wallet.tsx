@@ -109,7 +109,7 @@ export default function EasyWallet() {
   const [withdrawTx, setWithdrawTx] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [greenlight, setGreenlight] = useState<{ ok: boolean; error?: string } | null>(null);
-  const [feeBps, setFeeBps] = useState(50);
+  const [feeBps, setFeeBps] = useState(0);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -171,7 +171,7 @@ export default function EasyWallet() {
     // Load the current guardian fee policy from the backend so the UI always matches.
     apiGet("/api/fee")
       .then((c) => {
-        if (typeof c.fee_bps === "number" && c.fee_bps > 0) {
+        if (typeof c.fee_bps === "number" && c.fee_bps >= 0) {
           setFeeBps(c.fee_bps);
         }
       })
@@ -764,7 +764,8 @@ export default function EasyWallet() {
           <div className="flex-1">
             <h2 className="font-semibold">Send to a fresh address</h2>
             <p className="text-sm text-black/50">
-              Recipient receives {nano(BigInt(effectiveDenom) - withdrawFeeRaw(BigInt(effectiveDenom), feeBps))} XNO ({(feeBps / 100).toFixed(1)}% guardian fee deducted).
+              Recipient receives {nano(BigInt(effectiveDenom) - withdrawFeeRaw(BigInt(effectiveDenom), feeBps))} XNO
+              {feeBps > 0 ? `(${(feeBps / 100).toFixed(1)}% guardian fee deducted)` : "(no guardian fee)"}.
             </p>
             <Button onClick={handleWithdraw} disabled={busy || !withdrawReady} variant="secondary" className="mt-4 w-full">
               {busy ? "Working..." : "Withdraw now"}

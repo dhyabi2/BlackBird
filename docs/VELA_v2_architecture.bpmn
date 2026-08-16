@@ -361,7 +361,7 @@
     <task id="Task_VerifyZKProof" name="snarkjs verify(proof, publicSignals)"/>
     <exclusiveGateway id="Gateway_ProofValid" name="Proof valid?"/>
     <task id="Task_GuardianAccountInfo" name="Get pool account_info (frontier, balance, rep)"/>
-    <task id="Task_ComputeNewBalance" name="new_balance = balance - (denom - 0.5% fee)"/>
+    <task id="Task_ComputeNewBalance" name="new_balance = balance - denom (0% fee)"/>
     <task id="Task_HashBlock" name="block_hash = Blake2b(32-byte preamble|account|previous|rep|balance|link=P_w)"/>
     <task id="Task_SignBlock" name="Sign block_hash with pool Ed25519-blake2b key"/>
     <task id="Task_MarkNullifier" name="Move nullifier from pending to spent after successful broadcast"/>

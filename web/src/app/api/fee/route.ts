@@ -11,8 +11,8 @@ export async function GET() {
   return withApiHandler(async () => {
     const config = await getFeeConfig();
     return {
-      fee_bps: config.fee_bps ?? 50,
-      fee_percent: config.fee_percent ?? 0.5,
+      fee_bps: config.fee_bps ?? 0,
+      fee_percent: config.fee_percent ?? 0,
     };
   });
 }

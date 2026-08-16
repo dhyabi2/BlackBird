@@ -9,8 +9,7 @@ export function WarningBanner() {
   return (
     <div className="flex flex-col items-center justify-center gap-2 border-b border-black/10 bg-white px-4 py-3 text-center text-sm text-black sm:flex-row">
       <span>
-        <span className="font-semibold">Warning:</span> This is an unaudited
-        prototype. Do not deposit mainnet funds you cannot afford to lose.
+        <span className="font-semibold">Warning:</span> Only deposit amounts you can afford to lose.
       </span>
       <button
         onClick={() => setDismissed(true)}

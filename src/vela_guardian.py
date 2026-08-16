@@ -35,7 +35,7 @@ from .vela_constants import EPOCH_SECONDS, FEE_BPS, DENOMINATIONS
 def withdraw_fee_for(denomination: int) -> int:
     """Return the guardian fee in raw for a given denomination.
 
-    Fee is 0.5% (50 basis points) of the denomination, rounded down.
+    Fee is 0% (0 basis points) of the denomination.
     """
     return (denomination * FEE_BPS) // 10_000
 
@@ -319,7 +319,7 @@ def create_app(guardian: VelaGuardian) -> Flask:
 
     @app.route("/fee")
     def fee_route():
-        return jsonify({"fee_bps": FEE_BPS, "note": "0.5% of denomination"})
+        return jsonify({"fee_bps": FEE_BPS, "note": "0% of denomination"})
 
     @app.route("/withdraw", methods=["POST"])
     @require_api_key

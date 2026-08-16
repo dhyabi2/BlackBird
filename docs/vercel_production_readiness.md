@@ -1,8 +1,7 @@
 # Vercel Production Readiness Checklist
 
-This checklist covers what is required to run a **production VELA web client / API on Vercel** while keeping the heavy backend (indexer, guardian, prover) on Hostinger.
+This checklist covers what is required to run a **production BlackBird web client / API on Vercel** while keeping the heavy backend (indexer, guardian, prover) on Hostinger.
 
-> VELA is still an unaudited prototype. Do not use it for mainnet funds without a full security review.
 
 ## Architecture split
 
@@ -19,7 +18,7 @@ This checklist covers what is required to run a **production VELA web client / A
 ## Required accounts and keys
 
 - [x] Vercel account + project connected to GitHub repo.
-- [x] Hostinger VPS running the VELA backend (indexer, guardian, coordinator/prover).
+- [x] Hostinger VPS running the BlackBird backend (indexer, guardian, coordinator/prover).
 - [x] `rpc.nano.to` API key (`NANO_RPC_KEY`).
 - [x] VELA backend API key (`VELA_BACKEND_API_KEY`).
 - [ ] (Optional) Upstash Redis for cross-region rate limiting.
@@ -34,7 +33,7 @@ NANO_RPC_ENDPOINT=https://rpc.nano.to
 NANO_RPC_KEY=your_rpc_key_here
 
 # VELA backend on Hostinger
-VELA_BACKEND_URL=https://vela-backend.yourhostingerdomain.com
+VELA_BACKEND_URL=https://your-backend-domain.com
 VELA_BACKEND_API_KEY=your_backend_key_here
 
 # Rate limiting (optional but recommended)
@@ -42,8 +41,8 @@ UPSTASH_REDIS_REST_URL=https://...upstash.io
 UPSTASH_REDIS_REST_TOKEN=...
 
 # Public app config
-NEXT_PUBLIC_APP_NAME=VELA v2
-NEXT_PUBLIC_APP_URL=https://vela-web.vercel.app
+NEXT_PUBLIC_APP_NAME=BlackBird
+NEXT_PUBLIC_APP_URL=https://www.xblackbird.com
 ```
 
 ## Vercel API routes
@@ -85,7 +84,7 @@ NEXT_PUBLIC_APP_URL=https://vela-web.vercel.app
 - [x] API routes validate input with Zod.
 - [x] Rate limiting fallback on public routes (Redis optional).
 - [x] No secrets logged or returned in error messages.
-- [x] Mainnet-risk warnings shown in UI.
+- [x] Risk warnings shown in UI.
 
 ## Performance and reliability
 

@@ -31,7 +31,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <Nav />
         <main className="flex-1">{children}</main>
         <footer className="border-t border-black/10 py-6 text-center text-sm text-black/50">
-          BlackBird — unaudited prototype. Use at your own risk.
+          BlackBird
         </footer>
       </body>
     </html>
