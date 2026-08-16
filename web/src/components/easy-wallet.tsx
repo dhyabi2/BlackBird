@@ -586,7 +586,7 @@ export default function EasyWallet() {
     return (
       <div className="mx-auto max-w-md px-4 py-16">
         <h1 className="text-3xl font-bold">Restore wallet</h1>
-        <p className="mt-2 text-black/50">Enter your 12-word recovery phrase.</p>
+        <p className="mt-2 text-black/50">Enter your 24-word recovery phrase.</p>
         {error && <p className="mt-4 text-black">{error}</p>}
         <div className="mt-6 space-y-4">
           <textarea value={phrase} onChange={(e) => setPhrase(e.target.value)} placeholder="abandon abandon ability ..." rows={4} className={inputClass} />
@@ -767,7 +767,7 @@ export default function EasyWallet() {
       {phrase && (
         <div className="mt-8 rounded-xl border border-black/10 bg-black/5 p-5">
           <h3 className="font-semibold">Recovery phrase</h3>
-          <p className="mt-1 text-sm text-black/60">Save these 12 words. They are the only way to recover this wallet.</p>
+          <p className="mt-1 text-sm text-black/60">Save these 24 words. They are the only way to recover this wallet.</p>
           <p className="mt-3 break-words font-mono text-sm text-black">{phrase}</p>
         </div>
       )}
