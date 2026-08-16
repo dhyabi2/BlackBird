@@ -4,52 +4,36 @@ export type NanoRpcResponse<T = unknown> =
   | { error: string }
   | T;
 
-const FALLBACK_ENDPOINTS = [
-  "https://proxy.nanos.cc/proxy",
-  "https://node.somenano.com/proxy",
-  "https://rainstorm.city/api",
-];
-
 export async function nanoRpcCall<T = unknown>(
   action: string,
   params: Record<string, unknown> = {}
 ): Promise<T> {
   const env = getEnv();
-  const endpoints = [env.NANO_RPC_ENDPOINT, ...FALLBACK_ENDPOINTS];
+  const endpoint = env.NANO_RPC_ENDPOINT;
   const body = { action, ...params, key: env.NANO_RPC_KEY };
 
-  let lastError: Error | undefined;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: env.NANO_RPC_KEY,
+      "User-Agent": "VELA-web/1.0",
+    },
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
 
-  for (const endpoint of endpoints) {
-    try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: env.NANO_RPC_KEY,
-          "User-Agent": "VELA-web/1.0",
-        },
-        body: JSON.stringify(body),
-        cache: "no-store",
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status} from ${endpoint}`);
-      }
-
-      const data = (await response.json()) as NanoRpcResponse<T>;
-
-      if (data && typeof data === "object" && "error" in data) {
-        throw new Error(`Nano RPC error: ${data.error}`);
-      }
-
-      return data as T;
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-    }
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} from ${endpoint}`);
   }
 
-  throw lastError ?? new Error("All Nano RPC endpoints failed");
+  const data = (await response.json()) as NanoRpcResponse<T>;
+
+  if (data && typeof data === "object" && "error" in data) {
+    throw new Error(`Nano RPC error: ${data.error}`);
+  }
+
+  return data as T;
 }
 
 export async function getAccountBalance(account: string) {
