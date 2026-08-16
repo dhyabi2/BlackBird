@@ -26,13 +26,17 @@ function ensureNanoPrefix(address: string): string {
   return address;
 }
 
-function cleanBlock(block: Record<string, unknown>): Record<string, unknown> {
+function cleanBlock(
+  block: Record<string, unknown>,
+  subtype: "send" | "receive" | "open" | "change"
+): Record<string, unknown> {
   const cleaned = { ...block };
   delete cleaned.link_as_account;
   cleaned.account = ensureNanoPrefix(String(cleaned.account));
   if (cleaned.representative) {
     cleaned.representative = ensureNanoPrefix(String(cleaned.representative));
   }
+  cleaned.subtype = subtype;
   return cleaned;
 }
 
@@ -53,7 +57,7 @@ export function buildSendBlock(
     balance: data.balance,
     link: data.link,
   });
-  return { hash: block.hash, block: cleanBlock(block.block) };
+  return { hash: block.hash, block: cleanBlock(block.block, "send") };
 }
 
 export function buildReceiveBlock(
@@ -66,6 +70,8 @@ export function buildReceiveBlock(
     work: string;
   }
 ): NanoBlock {
+  const isOpen =
+    data.previous === "0000000000000000000000000000000000000000000000000000000000000000";
   const block = createBlock(secretKey, {
     work: data.work,
     previous: data.previous,
@@ -73,7 +79,10 @@ export function buildReceiveBlock(
     balance: data.balance,
     link: data.link,
   });
-  return { hash: block.hash, block: cleanBlock(block.block) };
+  return {
+    hash: block.hash,
+    block: cleanBlock(block.block, isOpen ? "open" : "receive"),
+  };
 }
 
 export { deriveAddress, derivePublicKey };

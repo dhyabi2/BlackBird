@@ -16,6 +16,8 @@ const STORAGE_KEY = "vela_wallet_v1";
 const SESSION_SEED_KEY = "vela_session_seed";
 const ZERO_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
 const DEFAULT_REP = "nano_3jwrszth46rk1mu7rmb4rhm54us8yg1gw3ipodftqtikf5yqdyr7471nsg1k";
+const SEND_THRESHOLD = "fffffff800000000";
+const RECEIVE_THRESHOLD = "fffffe0000000000";
 
 const DENOMINATIONS = [
   { raw: "100000000000000000000000000000", label: "0.1 XNO" },
@@ -109,6 +111,7 @@ export default function EasyWallet() {
   const [depositTx, setDepositTx] = useState<{ depositHash: string; commitHash: string } | null>(null);
   const [withdrawTx, setWithdrawTx] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [greenlight, setGreenlight] = useState<{ ok: boolean; error?: string } | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -121,6 +124,11 @@ export default function EasyWallet() {
     apiGet("/api/status")
       .then((s) => setEpoch(s.epoch ?? null))
       .catch(() => null);
+
+    // Strict backend green-light check before allowing any deposit.
+    apiGet("/api/greenlight")
+      .then(() => setGreenlight({ ok: true }))
+      .catch((err) => setGreenlight({ ok: false, error: err instanceof Error ? err.message : "Network check failed" }));
   }, []);
 
   const source = useMemo(() => (seed ? deriveLegacyAccount(seed, sourceIndex) : null), [seed, sourceIndex]);
@@ -308,7 +316,7 @@ export default function EasyWallet() {
 
     const isOpen = !sourceInfo.frontier;
     const workHash = isOpen ? source.publicKey : sourceInfo.frontier!;
-    const work = (await apiPost("/api/work", { hash: workHash, difficulty: "fffffff800000000" })).work;
+    const work = (await apiPost("/api/work", { hash: workHash, difficulty: RECEIVE_THRESHOLD })).work;
     const newBalance = (currentBalance + chosenAmount).toString();
 
     const receiveBlock = buildReceiveBlock(source.secretKey, {
@@ -363,7 +371,7 @@ export default function EasyWallet() {
         representative: sourceInfo.representative!,
         balance: (bal - denom).toString(),
         link: poolPubHex,
-        work: (await apiPost("/api/work", { hash: sourceInfo.frontier!, difficulty: "fffffff800000000" })).work,
+        work: (await apiPost("/api/work", { hash: sourceInfo.frontier!, difficulty: SEND_THRESHOLD })).work,
       });
       log(`Deposit hash: ${depositBlock.hash}`);
       await apiPost("/api/broadcast", { block: depositBlock.block });
@@ -375,7 +383,7 @@ export default function EasyWallet() {
         representative: sourceInfo.representative!,
         balance: (bal - denom - BigInt(1)).toString(),
         link: C_hex,
-        work: (await apiPost("/api/work", { hash: depositBlock.hash, difficulty: "fffffff800000000" })).work,
+        work: (await apiPost("/api/work", { hash: depositBlock.hash, difficulty: SEND_THRESHOLD })).work,
       });
       log(`Commit hash: ${commitBlock.hash}`);
       await apiPost("/api/broadcast", { block: commitBlock.block });
@@ -458,7 +466,7 @@ export default function EasyWallet() {
       // PoW must be computed on the pool frontier (the block's previous field), not the block hash.
       const workHash = typeof withdrawRes.block.previous === "string" ? withdrawRes.block.previous : withdrawRes.block_hash;
       setStatusMessage("Computing proof of work...");
-      const work = (await apiPost("/api/work", { hash: workHash, difficulty: "fffffff800000000" })).work;
+      const work = (await apiPost("/api/work", { hash: workHash, difficulty: SEND_THRESHOLD })).work;
       const broadcastRes = (await apiPost("/api/broadcast", { block: { ...withdrawRes.block, work } })) as { hash?: string };
       log(`Withdrawal broadcasted to ${withdraw.address}`);
       setWithdrawTx(broadcastRes.hash ?? withdrawRes.block_hash);
@@ -581,13 +589,37 @@ export default function EasyWallet() {
         </div>
       )}
 
+      {greenlight === null && (
+        <div className="mt-4 rounded-lg border border-black/10 bg-black/5 px-4 py-3 text-sm text-black">
+          <span className="mr-2 inline-block h-3 w-3 animate-spin rounded-full border border-black/30 border-t-black" />
+          Checking network and backend health...
+        </div>
+      )}
+
+      {greenlight?.ok === false && (
+        <div className="mt-4 rounded-lg border border-black/10 bg-black/5 px-4 py-3 text-sm text-black">
+          <span className="font-semibold">Network not ready:</span> {greenlight.error}
+          <button
+            onClick={() => {
+              setGreenlight(null);
+              apiGet("/api/greenlight")
+                .then(() => setGreenlight({ ok: true }))
+                .catch((err) => setGreenlight({ ok: false, error: err instanceof Error ? err.message : "Network check failed" }));
+            }}
+            className="ml-3 rounded-lg border border-black/20 px-3 py-1 text-xs hover:bg-black/5"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       <div className="mt-6 space-y-4">
         <div className={`${stepBase} ${activeStep !== 1 ? stepInactive : ""}`}>
           <div className={stepNumber}>1</div>
           <div className="flex-1">
             <h2 className="font-semibold">Fund your source address</h2>
             <p className="text-sm text-black/50">Send exactly <strong>{depositAmountNano} XNO</strong> to this address.</p>
-            {source && (
+            {greenlight?.ok && source && (
               <div className="mt-4">
                 <div className="flex items-center gap-2">
                   <code className="break-all rounded-lg border border-black/10 bg-black/5 px-3 py-2 text-xs font-mono">{source.address}</code>
@@ -605,6 +637,9 @@ export default function EasyWallet() {
                 </p>
               </div>
             )}
+            {greenlight?.ok === false && (
+              <p className="mt-4 text-sm text-black/70">The deposit address is hidden until the network check passes.</p>
+            )}
           </div>
         </div>
 
@@ -616,7 +651,7 @@ export default function EasyWallet() {
             {hasPending && !depositDone && (
               <p className="mt-2 text-sm text-black/70">Funding detected — you can deposit now.</p>
             )}
-            <Button onClick={handleDeposit} disabled={busy || !hasFunds || depositDone} className="mt-4 w-full">
+            <Button onClick={handleDeposit} disabled={busy || !greenlight?.ok || !hasFunds || depositDone} className="mt-4 w-full">
               {busy ? "Working..." : depositDone ? "Deposited" : "Deposit now"}
             </Button>
             {depositTx && (
