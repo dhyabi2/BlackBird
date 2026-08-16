@@ -80,6 +80,25 @@ export async function submitWithdrawal(body: {
   });
 }
 
+export async function submitWithdrawalBroadcast(body: {
+  nullifier: string;
+  block: {
+    type: "state";
+    account: string;
+    previous: string;
+    representative: string;
+    balance: string;
+    link: string;
+    signature: string;
+    work: string;
+  };
+}) {
+  return velaFetch("/broadcast_withdrawal", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export async function requestProof(body: {
   n: string;
   t: string;

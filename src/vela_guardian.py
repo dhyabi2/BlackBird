@@ -61,6 +61,8 @@ class VelaGuardian:
         self.session = requests.Session()
         self.rpc = NanoRPC()
         self.spent_nullifiers: set = set()
+        # Nullifiers that have been signed but not yet broadcast.
+        self.pending_withdrawals: dict = {}
         self._lock = threading.Lock()
         self._load_state()
 
@@ -75,6 +77,9 @@ class VelaGuardian:
                 with open(path) as f:
                     data = json.load(f)
                 self.spent_nullifiers = set(int(x, 16) for x in data.get("nullifiers", []))
+                self.pending_withdrawals = {
+                    int(k, 16): v for k, v in data.get("pending", {}).items()
+                }
             except Exception as e:
                 print("Guardian load state error:", e)
 
@@ -85,7 +90,13 @@ class VelaGuardian:
         fd, tmp = tempfile.mkstemp(dir=self.data_dir, suffix=".tmp")
         try:
             with os.fdopen(fd, "w") as f:
-                json.dump({"nullifiers": [hex(x) for x in self.spent_nullifiers]}, f)
+                state = {
+                    "nullifiers": [hex(x) for x in self.spent_nullifiers],
+                    "pending": {
+                        hex(k): v for k, v in self.pending_withdrawals.items()
+                    },
+                }
+                json.dump(state, f)
             os.chmod(tmp, 0o600)
             os.replace(tmp, path)
         except Exception:
@@ -196,6 +207,20 @@ class VelaGuardian:
             if N in self.spent_nullifiers:
                 return {"error": "nullifier already spent"}
 
+            # If we already signed this withdrawal, return the same signed block
+            # so the client can attach work and broadcast it.
+            if N in self.pending_withdrawals:
+                pending = self.pending_withdrawals[N]
+                return {
+                    "ok": True,
+                    "block": pending["block"],
+                    "block_hash": pending["block_hash"],
+                    "nullifier": hex(N),
+                    "fee_raw": pending["fee_raw"],
+                    "send_amount_raw": pending["send_amount_raw"],
+                    "pending": True,
+                }
+
             block_hash = nano_state_block_hash(
                 pool_pub,
                 previous,
@@ -216,7 +241,13 @@ class VelaGuardian:
                 "work": "0000000000000000",
             }
 
-            self.spent_nullifiers.add(N)
+            self.pending_withdrawals[N] = {
+                "block": block,
+                "block_hash": block_hash.hex(),
+                "fee_raw": fee_raw,
+                "send_amount_raw": send_amount,
+                "created_at": time.time(),
+            }
             self._save_state()
 
         return {
@@ -226,6 +257,52 @@ class VelaGuardian:
             "nullifier": hex(N),
             "fee_raw": fee_raw,
             "send_amount_raw": send_amount,
+            "pending": True,
+        }
+
+    def broadcast_withdrawal(self, req: dict) -> dict:
+        """Broadcast a signed withdrawal block and mark the nullifier spent on success."""
+        try:
+            N = int(req["nullifier"], 16)
+            block = req["block"]
+        except Exception:
+            return {"error": "invalid request"}
+
+        with self._lock:
+            if N in self.spent_nullifiers:
+                return {"error": "nullifier already spent"}
+
+            pending = self.pending_withdrawals.get(N)
+            if not pending:
+                return {"error": "withdrawal not signed"}
+
+            # Verify the provided block is the one we signed (work may differ).
+            signed = pending["block"]
+            for field in ("type", "account", "previous", "representative", "balance", "link", "signature"):
+                if block.get(field) != signed.get(field):
+                    return {"error": f"block field mismatch: {field}"}
+
+            if block.get("work") == "0000000000000000":
+                return {"error": "block work not set"}
+
+            # Broadcast via the Nano RPC.
+            try:
+                result = self._broadcast_block(block)
+            except Exception as e:
+                return {"error": f"broadcast failed: {e}"}
+
+            if result.get("error"):
+                return {"error": f"broadcast rejected: {result['error']}"}
+
+            # Only mark spent after a successful broadcast.
+            self.spent_nullifiers.add(N)
+            self.pending_withdrawals.pop(N, None)
+            self._save_state()
+
+        return {
+            "ok": True,
+            "nullifier": hex(N),
+            "broadcast_result": result,
         }
 
 
@@ -249,6 +326,15 @@ def create_app(guardian: VelaGuardian) -> Flask:
     def withdraw():
         data = request.json or {}
         result = guardian.withdraw(data)
+        if "error" in result:
+            return jsonify(result), 400
+        return jsonify(result)
+
+    @app.route("/broadcast_withdrawal", methods=["POST"])
+    @require_api_key
+    def broadcast_withdrawal():
+        data = request.json or {}
+        result = guardian.broadcast_withdrawal(data)
         if "error" in result:
             return jsonify(result), 400
         return jsonify(result)

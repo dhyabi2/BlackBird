@@ -19,13 +19,6 @@ from requests.adapters import HTTPAdapter
 
 
 DEFAULT_RPC_URLS = ["https://rpc.nano.to"]
-PUBLIC_FALLBACKS = [
-    "https://rpc.nano.to",
-    "https://node.somenano.com/proxy",
-    "https://proxy.nanos.cc/proxy",
-    "https://rainstorm.city/api",
-    "https://nanoslo.0x.no/proxy",
-]
 
 # Nano errors that are valid ledger answers, not endpoint failures.
 _NANO_ERRORS = (
@@ -42,18 +35,16 @@ _NANO_ERRORS = (
 
 
 def _load_endpoints() -> List[str]:
-    """Build endpoint list from NANO_RPC_URL env var plus public fallbacks."""
+    """Build endpoint list from NANO_RPC_URL env var.
+
+    Only https://rpc.nano.to is used by default. Public fallback endpoints are
+    intentionally disabled so the RPC key is never sent to third-party nodes.
+    """
     raw = os.environ.get("NANO_RPC_URL", "").strip()
     if raw:
         endpoints = [u.strip().rstrip("/") for u in raw.split(",") if u.strip()]
     else:
         endpoints = list(DEFAULT_RPC_URLS)
-
-    # Only add public fallbacks if the operator is already using public RPCs.
-    if any(("127.0.0.1" not in u and "localhost" not in u) for u in endpoints):
-        for f in PUBLIC_FALLBACKS:
-            if f not in endpoints:
-                endpoints.append(f)
     return endpoints
 
 

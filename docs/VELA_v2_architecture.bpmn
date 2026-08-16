@@ -80,7 +80,7 @@
       <task id="Task_ClientRequestWithdraw" name="POST /api/withdraw {destination, proof, publicSignals}" isForCompensation="false"/>
       <task id="Task_InspectGuardianBlock" name="Receive signed block &amp; block_hash from guardian"/>
       <task id="Task_ComputeWithdrawWork" name="Compute PoW on block.previous (pool frontier)"/>
-      <task id="Task_ClientBroadcast" name="POST /api/broadcast signed block" isForCompensation="false"/>
+      <task id="Task_ClientBroadcast" name="POST /api/broadcast_withdrawal {nullifier, signed block + work}" isForCompensation="false"/>
       <endEvent id="End_SubWithdraw" name="Withdrawal broadcast"/>
       <sequenceFlow id="SW1" sourceRef="Start_SubWithdraw" targetRef="Task_RecoverHashes"/>
       <sequenceFlow id="SW2" sourceRef="Task_RecoverHashes" targetRef="Task_ClientSubmitDeposit"/>
@@ -364,9 +364,9 @@
     <task id="Task_ComputeNewBalance" name="new_balance = balance - (denom - 0.5% fee)"/>
     <task id="Task_HashBlock" name="block_hash = Blake2b(32-byte preamble|account|previous|rep|balance|link=P_w)"/>
     <task id="Task_SignBlock" name="Sign block_hash with pool Ed25519-blake2b key"/>
-    <task id="Task_MarkNullifier" name="Add nullifier to spent set under threading.Lock"/>
+    <task id="Task_MarkNullifier" name="Move nullifier from pending to spent after successful broadcast"/>
     <task id="Task_PersistGuardianState" name="Atomic write of guardian_state.json with 0o600 permissions"/>
-    <task id="Task_ReturnBlock" name="Return {block, block_hash, nullifier}"/>
+    <task id="Task_ReturnBlock" name="Return {block, block_hash, nullifier}; store as pending (not spent)"/>
     <task id="Task_RejectRequest" name="Return {error: verification failed}"/>
     <endEvent id="End_GuardianSigned" name="Signed block returned"/>
     <endEvent id="End_GuardianRejected" name="Request rejected"/>

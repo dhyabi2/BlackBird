@@ -483,9 +483,14 @@ export default function EasyWallet() {
       const workHash = typeof withdrawRes.block.previous === "string" ? withdrawRes.block.previous : withdrawRes.block_hash;
       setStatusMessage("Computing proof of work...");
       const work = (await apiPost("/api/work", { hash: workHash, difficulty: SEND_THRESHOLD })).work;
-      const broadcastRes = (await apiPost("/api/broadcast", { block: { ...withdrawRes.block, work } })) as { hash?: string };
+      const signedBlock = { ...withdrawRes.block, work };
+      const broadcastRes = (await apiPost("/api/broadcast_withdrawal", {
+        nullifier: nullifier.toString(16),
+        block: signedBlock,
+      })) as { broadcast_result?: { hash?: string }; ok?: boolean };
+      if (!broadcastRes.ok) throw new Error("Guardian did not confirm broadcast");
       log(`Private send broadcasted to ${withdraw.address}`);
-      setWithdrawTx(broadcastRes.hash ?? withdrawRes.block_hash);
+      setWithdrawTx(broadcastRes.broadcast_result?.hash ?? withdrawRes.block_hash);
       setLastWithdrawAddress(withdraw.address);
       setWithdrawIndex((i) => i + 1);
       setWithdrawReady(false);

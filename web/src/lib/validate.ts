@@ -34,6 +34,20 @@ export const withdrawRequestSchema = z.object({
   publicSignals: z.array(z.string()).length(4),
 });
 
+export const broadcastWithdrawalRequestSchema = z.object({
+  nullifier: z.string().min(1, "nullifier is required"),
+  block: z.object({
+    type: z.literal("state"),
+    account: nanoAddressSchema,
+    previous: hexHashSchema,
+    representative: nanoAddressSchema,
+    balance: z.string().regex(/^\d+$/, "balance must be raw decimal"),
+    link: hexHashSchema,
+    signature: z.string().regex(/^[0-9a-fA-F]{128}$/, "Invalid signature"),
+    work: z.string().regex(/^[0-9a-fA-F]{16}$/, "Invalid work"),
+  }),
+});
+
 export const proveRequestSchema = z.object({
   n: hexHashSchema,
   t: hexHashSchema,
