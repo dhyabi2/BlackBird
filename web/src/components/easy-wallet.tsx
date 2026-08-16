@@ -1,18 +1,21 @@
 "use client";
 
 import "@/lib/polyfills";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import { deriveLegacyAccount, buildSendBlock } from "@/lib/wallet";
+import { deriveLegacyAccount, buildSendBlock, buildReceiveBlock } from "@/lib/wallet";
 import { encryptSeed, decryptSeed } from "@/lib/crypto-storage";
 import { createBackupPhrase, phraseToSeedHex } from "@/lib/mnemonic";
 import { computeCommitment, computeNullifier, hexToBytes, bytesToHex } from "@/lib/vela-crypto";
 import { blake2b } from "blakejs";
 import { convert, Unit } from "nanocurrency";
 import { Button } from "@/components/ui/Button";
+import { useNanoWebsocket } from "@/lib/nano-ws";
 
 const STORAGE_KEY = "vela_wallet_v1";
 const SESSION_SEED_KEY = "vela_session_seed";
+const ZERO_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
+const DEFAULT_REP = "nano_1center16minsswuug1d1pwxjqqz49y4pqzc8m3rpx5c8j5eu6ns7b6k3rj1i";
 
 const DENOMINATIONS = [
   { raw: "100000000000000000000000000000", label: "0.1 XNO" },
@@ -96,18 +99,17 @@ export default function EasyWallet() {
   const [epoch, setEpoch] = useState<number | null>(null);
   const [balance, setBalance] = useState<string | null>(null);
   const [pendingRaw, setPendingRaw] = useState<string | null>(null);
-  const [sourceInfo, setSourceInfo] = useState<{ frontier?: string; representative?: string } | null>(null);
+  const [pendingBlocks, setPendingBlocks] = useState<Record<string, { amount: string; source: string }>>({});
+  const [sourceInfo, setSourceInfo] = useState<{ frontier?: string | null; representative?: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [lastWithdrawAddress, setLastWithdrawAddress] = useState<string | null>(null);
-
   const [depositDone, setDepositDone] = useState(false);
   const [withdrawReady, setWithdrawReady] = useState(false);
   const [depositTx, setDepositTx] = useState<{ depositHash: string; commitHash: string } | null>(null);
   const [withdrawTx, setWithdrawTx] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-  // Persist seed to session storage whenever it is set.
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (seed) {
@@ -124,42 +126,56 @@ export default function EasyWallet() {
   const source = useMemo(() => (seed ? deriveLegacyAccount(seed, sourceIndex) : null), [seed, sourceIndex]);
   const withdraw = useMemo(() => (seed ? deriveLegacyAccount(seed, withdrawIndex) : null), [seed, withdrawIndex]);
 
-  // Poll balance and pending sends for the source address.
+  const refreshBalanceAndPending = useCallback(async () => {
+    if (!source) return;
+    try {
+      const [info, pending] = await Promise.all([
+        apiGet(`/api/account_info?account=${encodeURIComponent(source.address)}`),
+        apiGet(`/api/pending?account=${encodeURIComponent(source.address)}`).catch(() => ({ blocks: {} })),
+      ]);
+      setBalance(info.balance ?? "0");
+      setSourceInfo({ frontier: info.frontier ?? null, representative: info.representative ?? null });
+
+      const blocks = pending.blocks;
+      const map: Record<string, { amount: string; source: string }> = {};
+      let pendingSum = BigInt(0);
+      if (blocks && typeof blocks === "object") {
+        for (const [hash, block] of Object.entries(blocks as Record<string, { amount: string; source: string }>)) {
+          map[hash] = block;
+          pendingSum += BigInt(block.amount ?? "0");
+        }
+      }
+      setPendingBlocks(map);
+      setPendingRaw(pendingSum.toString());
+    } catch {
+      setBalance(null);
+      setPendingRaw(null);
+      setPendingBlocks({});
+      setSourceInfo(null);
+    }
+  }, [source]);
+
+  // Polling fallback for balance/pending.
   useEffect(() => {
     if (!source) return;
-    const address = source.address;
     let alive = true;
-    async function poll() {
-      try {
-        const [info, pending] = await Promise.all([
-          apiGet(`/api/account_info?account=${encodeURIComponent(address)}`),
-          apiGet(`/api/pending?account=${encodeURIComponent(address)}`).catch(() => ({ blocks: {} })),
-        ]);
-        if (!alive) return;
-        setBalance(info.balance ?? "0");
-        setSourceInfo({ frontier: info.frontier, representative: info.representative });
-
-        const blocks = pending.blocks;
-        let pendingSum = BigInt(0);
-        if (blocks && typeof blocks === "object") {
-          for (const block of Object.values(blocks as Record<string, { amount: string }>)) {
-            pendingSum += BigInt(block.amount ?? "0");
-          }
-        }
-        setPendingRaw(pendingSum.toString());
-      } catch {
-        setBalance(null);
-        setPendingRaw(null);
-        setSourceInfo(null);
-      }
+    async function tick() {
+      if (!alive) return;
+      await refreshBalanceAndPending();
     }
-    poll();
-    const id = setInterval(poll, 10_000);
+    tick();
+    const id = setInterval(tick, 5_000);
     return () => {
       alive = false;
       clearInterval(id);
     };
-  }, [source]);
+  }, [source, refreshBalanceAndPending]);
+
+  // Real-time websocket detection for incoming sends.
+  useNanoWebsocket(source?.address ?? null, source?.publicKey ?? null, (amount) => {
+    log(`Live: incoming ${nano(BigInt(amount))} XNO detected`);
+    void refreshBalanceAndPending();
+  });
 
   // Recommend denomination based on available funds unless the user picked one.
   const effectiveDenom = useMemo(() => {
@@ -233,16 +249,102 @@ export default function EasyWallet() {
     }
   }
 
+  async function waitForBalance(targetRaw: string, timeoutMs = 60_000): Promise<boolean> {
+    const target = BigInt(targetRaw);
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      await new Promise((r) => setTimeout(r, 2_000));
+      try {
+        const info = await apiGet(`/api/account_info?account=${encodeURIComponent(source!.address)}`);
+        setBalance(info.balance ?? "0");
+        setSourceInfo({ frontier: info.frontier ?? null, representative: info.representative ?? null });
+        if (BigInt(info.balance ?? "0") >= target) return true;
+      } catch {
+        // keep waiting
+      }
+    }
+    return false;
+  }
+
+  async function receivePending(requiredRaw: bigint): Promise<boolean> {
+    if (!source || !sourceInfo) return false;
+    const currentBalance = BigInt(balance ?? "0");
+    if (currentBalance >= requiredRaw) return true;
+
+    const entries = Object.entries(pendingBlocks);
+    if (entries.length === 0) return false;
+
+    // Prefer a single pending send that covers the shortfall.
+    let chosenHash: string | null = null;
+    let chosenAmount = BigInt(0);
+    for (const [hash, block] of entries) {
+      const amt = BigInt(block.amount ?? "0");
+      if (currentBalance + amt >= requiredRaw) {
+        chosenHash = hash;
+        chosenAmount = amt;
+        break;
+      }
+    }
+    // Otherwise pick the largest pending send.
+    if (!chosenHash) {
+      for (const [hash, block] of entries) {
+        const amt = BigInt(block.amount ?? "0");
+        if (amt > chosenAmount) {
+          chosenAmount = amt;
+          chosenHash = hash;
+        }
+      }
+    }
+    if (!chosenHash) return false;
+
+    let rep: string | null | undefined = sourceInfo.representative;
+    if (!rep) {
+      // Opening the account: use the sender's representative, falling back to a default.
+      const sender = pendingBlocks[chosenHash].source;
+      const senderInfo = await apiGet(`/api/account_info?account=${encodeURIComponent(sender)}`).catch(() => null);
+      rep = senderInfo?.representative || DEFAULT_REP;
+    }
+    const representative = rep || DEFAULT_REP;
+
+    const isOpen = !sourceInfo.frontier;
+    const workHash = isOpen ? source.publicKey : sourceInfo.frontier!;
+    const work = (await apiPost("/api/work", { hash: workHash, difficulty: "fffffff800000000" })).work;
+    const newBalance = (currentBalance + chosenAmount).toString();
+
+    const receiveBlock = buildReceiveBlock(source.secretKey, {
+      previous: isOpen ? ZERO_HASH : sourceInfo.frontier!,
+      representative,
+      balance: newBalance,
+      link: chosenHash,
+      work,
+    });
+    log(`Receive hash: ${receiveBlock.hash}`);
+    await apiPost("/api/broadcast", { block: receiveBlock.block });
+    log("Receive broadcasted");
+
+    return waitForBalance(newBalance);
+  }
+
   async function handleDeposit() {
-    if (!source || !withdraw || !sourceInfo || !balance) return;
+    if (!source || !withdraw || !sourceInfo) return;
     setBusy(true);
-    setStatusMessage("Building deposit transaction...");
+    setStatusMessage("Preparing deposit...");
     setWithdrawReady(false);
     try {
       const denom = BigInt(effectiveDenom);
-      const bal = BigInt(balance);
-      if (bal < denom + BigInt(1)) {
-        throw new Error(`Send at least ${nano(denom + BigInt(1))} XNO to your source address first`);
+      const required = denom + BigInt(1);
+      let bal = BigInt(balance ?? "0");
+
+      // Auto-receive pending sends if the source balance is not yet spendable.
+      if (bal < required) {
+        const pendingSum = BigInt(pendingRaw ?? "0");
+        if (bal + pendingSum < required) {
+          throw new Error(`Send at least ${nano(required)} XNO to your source address first`);
+        }
+        setStatusMessage("Receiving pending funds...");
+        const received = await receivePending(required);
+        if (!received) throw new Error("Could not receive funds in time. Try again.");
+        bal = BigInt(balance ?? "0");
       }
 
       const poolData = await apiGet(`/api/pool_address/${effectiveDenom}`);
@@ -255,17 +357,19 @@ export default function EasyWallet() {
       const C_hex = C.toString(16).padStart(64, "0");
       log(`Commitment: ${C_hex.slice(0, 16)}...`);
 
+      setStatusMessage("Broadcasting deposit block...");
       const depositBlock = buildSendBlock(source.secretKey, {
         previous: sourceInfo.frontier!,
         representative: sourceInfo.representative!,
         balance: (bal - denom).toString(),
         link: poolPubHex,
-        work: (await apiPost("/api/work", { hash: sourceInfo.frontier, difficulty: "fffffff800000000" })).work,
+        work: (await apiPost("/api/work", { hash: sourceInfo.frontier!, difficulty: "fffffff800000000" })).work,
       });
       log(`Deposit hash: ${depositBlock.hash}`);
       await apiPost("/api/broadcast", { block: depositBlock.block });
       log("Deposit broadcasted");
 
+      setStatusMessage("Broadcasting commitment block...");
       const commitBlock = buildSendBlock(source.secretKey, {
         previous: depositBlock.hash,
         representative: sourceInfo.representative!,
@@ -296,7 +400,7 @@ export default function EasyWallet() {
 
   function startDepositStatusPolling(C_hex: string) {
     let attempts = 0;
-    const maxAttempts = 60; // ~5 minutes at 5s intervals
+    const maxAttempts = 60;
     const id = setInterval(async () => {
       attempts++;
       try {
@@ -435,14 +539,14 @@ export default function EasyWallet() {
     );
   }
 
-  const hasFunds = Boolean(balance && BigInt(balance) >= BigInt(effectiveDenom) + BigInt(1));
+  const totalAvailable = (BigInt(balance ?? "0") + BigInt(pendingRaw ?? "0")).toString();
+  const hasFunds = Boolean(BigInt(totalAvailable) >= BigInt(effectiveDenom) + BigInt(1));
   const hasPending = Boolean(pendingRaw && BigInt(pendingRaw) > 0);
 
-  // Determine active step for highlighting.
   let activeStep = 1;
   if (hasFunds || depositDone) activeStep = 2;
   if (withdrawReady) activeStep = 3;
-  if (busy) activeStep = 0; // keep neutral while working
+  if (busy) activeStep = 0;
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-12">
@@ -451,9 +555,7 @@ export default function EasyWallet() {
           <h1 className="text-3xl font-bold">Wallet</h1>
           <p className="mt-2 text-black/50">Fund the source address, deposit, then withdraw privately.</p>
         </div>
-        <Button variant="ghost" onClick={lock} className="shrink-0">
-          Lock
-        </Button>
+        <Button variant="ghost" onClick={lock} className="shrink-0">Lock</Button>
       </div>
 
       <div className="mt-6 flex items-center justify-between">
@@ -498,7 +600,7 @@ export default function EasyWallet() {
                   <a href={depositUri} className="rounded-lg border border-black/20 px-3 py-2 text-sm hover:bg-black/5">Open in wallet</a>
                 </div>
                 <p className="mt-2 text-xs text-black/50">
-                  Balance: {balance ? `${nano(BigInt(balance))} XNO` : "—"}
+                  Available: {balance ? `${nano(BigInt(balance))} XNO` : "—"}
                   {hasPending && ` · Pending: ${nano(BigInt(pendingRaw ?? "0"))} XNO`}
                 </p>
               </div>

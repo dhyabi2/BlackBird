@@ -41,7 +41,7 @@ const securityHeaders = [
       "script-src 'self' 'unsafe-eval' 'unsafe-inline'",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data:",
-      `connect-src 'self' ${backendOrigin} https://rpc.nano.to https://*.upstash.io`,
+      `connect-src 'self' ${backendOrigin} https://rpc.nano.to wss://ws.nano.to https://*.upstash.io`,
       "font-src 'self'",
       "object-src 'none'",
       "base-uri 'self'",

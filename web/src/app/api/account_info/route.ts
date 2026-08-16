@@ -25,6 +25,19 @@ export async function GET(request: NextRequest) {
       throw new ApiError(429, "Rate limit exceeded");
     }
 
-    return getAccountInfo(parsed.data.account);
+    try {
+      return await getAccountInfo(parsed.data.account);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.includes("Account not found")) {
+        return {
+          opened: false,
+          balance: "0",
+          frontier: null,
+          representative: null,
+        };
+      }
+      throw err;
+    }
   });
 }

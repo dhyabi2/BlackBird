@@ -26,6 +26,16 @@ function ensureNanoPrefix(address: string): string {
   return address;
 }
 
+function cleanBlock(block: Record<string, unknown>): Record<string, unknown> {
+  const cleaned = { ...block };
+  delete cleaned.link_as_account;
+  cleaned.account = ensureNanoPrefix(String(cleaned.account));
+  if (cleaned.representative) {
+    cleaned.representative = ensureNanoPrefix(String(cleaned.representative));
+  }
+  return cleaned;
+}
+
 export function buildSendBlock(
   secretKey: string,
   data: {
@@ -43,14 +53,27 @@ export function buildSendBlock(
     balance: data.balance,
     link: data.link,
   });
+  return { hash: block.hash, block: cleanBlock(block.block) };
+}
 
-  const cleaned = { ...block.block };
-  // link_as_account is not a standard state-block field for process
-  delete cleaned.link_as_account;
-  cleaned.account = ensureNanoPrefix(String(cleaned.account));
-  cleaned.representative = ensureNanoPrefix(String(cleaned.representative));
-
-  return { hash: block.hash, block: cleaned };
+export function buildReceiveBlock(
+  secretKey: string,
+  data: {
+    previous: string;
+    representative: string;
+    balance: string;
+    link: string;
+    work: string;
+  }
+): NanoBlock {
+  const block = createBlock(secretKey, {
+    work: data.work,
+    previous: data.previous,
+    representative: data.representative,
+    balance: data.balance,
+    link: data.link,
+  });
+  return { hash: block.hash, block: cleanBlock(block.block) };
 }
 
 export { deriveAddress, derivePublicKey };
