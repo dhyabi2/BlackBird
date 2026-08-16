@@ -10,6 +10,7 @@ import { computeCommitment, computeNullifier, hexToBytes, bytesToHex } from "@/l
 import { blake2b } from "blakejs";
 import { convert, Unit } from "nanocurrency";
 import { Button } from "@/components/ui/Button";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { useNanoWebsocket } from "@/lib/nano-ws";
 
 const STORAGE_KEY = "vela_wallet_v1";
@@ -497,9 +498,22 @@ export default function EasyWallet() {
   const inputClass =
     "w-full rounded-lg border border-black/20 bg-white px-4 py-2 text-black focus:border-black focus:outline-none";
 
-  const stepBase = "flex items-start gap-4 rounded-xl border border-black/10 bg-white p-5 transition-opacity";
-  const stepInactive = "opacity-60";
-  const stepNumber = "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-black/20 text-sm font-semibold";
+  function stepClasses(step: number) {
+    const isActive = activeStep === step;
+    const isCompleted = completedStep >= step;
+    return [
+      "flex items-start gap-4 rounded-xl border bg-white p-5 transition-opacity",
+      isActive || isCompleted ? "border-black/20" : "border-black/10 opacity-60",
+    ].join(" ");
+  }
+  function stepNumClasses(step: number) {
+    const isActive = activeStep === step;
+    const isCompleted = completedStep >= step;
+    return [
+      "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-sm font-semibold",
+      isCompleted ? "border-black bg-black text-white" : isActive ? "border-black text-black" : "border-black/20 text-black/50",
+    ].join(" ");
+  }
 
   if (view === "create") {
     return (
@@ -555,6 +569,11 @@ export default function EasyWallet() {
   if (hasFunds || depositDone) activeStep = 2;
   if (withdrawReady) activeStep = 3;
   if (busy) activeStep = 0;
+
+  let completedStep = 0;
+  if (hasFunds) completedStep = 1;
+  if (depositDone) completedStep = 2;
+  if (withdrawTx) completedStep = 3;
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-12">
@@ -613,9 +632,16 @@ export default function EasyWallet() {
         </div>
       )}
 
+      {greenlight?.ok && epoch && (
+        <div className="mt-4 flex items-center justify-between rounded-lg border border-black/10 bg-black/5 px-4 py-2 text-xs text-black/70">
+          <span>Epoch <span className="font-mono font-semibold text-black">{epoch}</span></span>
+          <span className="text-black/50">Pool ready</span>
+        </div>
+      )}
+
       <div className="mt-6 space-y-4">
-        <div className={`${stepBase} ${activeStep !== 1 ? stepInactive : ""}`}>
-          <div className={stepNumber}>1</div>
+        <div className={stepClasses(1)}>
+          <div className={stepNumClasses(1)}>1</div>
           <div className="flex-1">
             <h2 className="font-semibold">Fund your source address</h2>
             <p className="text-sm text-black/50">Send exactly <strong>{depositAmountNano} XNO</strong> to this address.</p>
@@ -623,7 +649,7 @@ export default function EasyWallet() {
               <div className="mt-4">
                 <div className="flex items-center gap-2">
                   <code className="break-all rounded-lg border border-black/10 bg-black/5 px-3 py-2 text-xs font-mono">{source.address}</code>
-                  <button onClick={() => source && navigator.clipboard.writeText(source.address)} className="rounded-lg border border-black/20 px-3 py-2 text-sm hover:bg-black/5">Copy</button>
+                  <CopyButton text={source.address} />
                 </div>
                 <div className="mt-4 inline-block rounded-lg border border-black/10 bg-white p-4">
                   {depositUri && <QRCodeSVG value={depositUri} size={160} />}
@@ -643,8 +669,8 @@ export default function EasyWallet() {
           </div>
         </div>
 
-        <div className={`${stepBase} ${activeStep !== 2 ? stepInactive : ""}`}>
-          <div className={stepNumber}>2</div>
+        <div className={stepClasses(2)}>
+          <div className={stepNumClasses(2)}>2</div>
           <div className="flex-1">
             <h2 className="font-semibold">Deposit into the pool</h2>
             <p className="text-sm text-black/50">Move {nano(BigInt(effectiveDenom))} XNO + 1 raw into the privacy pool.</p>
@@ -663,8 +689,8 @@ export default function EasyWallet() {
           </div>
         </div>
 
-        <div className={`${stepBase} ${activeStep !== 3 ? stepInactive : ""}`}>
-          <div className={stepNumber}>3</div>
+        <div className={stepClasses(3)}>
+          <div className={stepNumClasses(3)}>3</div>
           <div className="flex-1">
             <h2 className="font-semibold">Withdraw to a fresh address</h2>
             <p className="text-sm text-black/50">Receive {nano(BigInt(effectiveDenom) - BigInt(1e28))} XNO minus the 0.01 XNO guardian fee.</p>

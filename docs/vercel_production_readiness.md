@@ -11,16 +11,17 @@ This checklist covers what is required to run a **production VELA web client / A
 | Static web UI | ✅ | ❌ |
 | Serverless API routes (proxy, status, health) | ✅ | ❌ |
 | Nano RPC queries (via `rpc.nano.to`) | ✅ (server-side) | optional |
+| Real-time confirmations (via `wss://ws.nano.to`) | ✅ (browser) | ❌ |
 | Indexer / guardian / FROST nodes | ❌ | ✅ |
 | ZK proof generation | ⚠️ roadmap / remote proxy | ✅ |
 | Persistent state database | ❌ (use Redis/Postgres) | ✅ or separate DB host |
 
 ## Required accounts and keys
 
-- [ ] Vercel account + project connected to GitHub repo.
-- [ ] Hostinger VPS running the VELA backend (indexer, guardian, coordinator/prover).
-- [ ] `rpc.nano.to` API key (`NANO_RPC_KEY`).
-- [ ] VELA backend API key (`VELA_BACKEND_API_KEY`).
+- [x] Vercel account + project connected to GitHub repo.
+- [x] Hostinger VPS running the VELA backend (indexer, guardian, coordinator/prover).
+- [x] `rpc.nano.to` API key (`NANO_RPC_KEY`).
+- [x] VELA backend API key (`VELA_BACKEND_API_KEY`).
 - [ ] (Optional) Upstash Redis for cross-region rate limiting.
 
 ## Environment variables
@@ -51,10 +52,13 @@ NEXT_PUBLIC_APP_URL=https://vela-web.vercel.app
 |-------|--------|-------------|
 | `/api/health` | GET | Vercel + Nano RPC health |
 | `/api/status` | GET | Pool status from Hostinger backend |
+| `/api/greenlight` | GET | Strict pre-deposit check: Nano RPC + backend health |
 | `/api/balance` | GET | Nano account balance via `rpc.nano.to` |
-| `/api/account_info` | GET | Nano account info (frontier, rep, balance) |
+| `/api/account_info` | GET | Nano account info (frontier, rep, balance; handles unopened accounts) |
+| `/api/pending` | GET | Pending/receivable blocks for an account |
 | `/api/pool_address/[denom]` | GET | Pool public key for a denomination |
 | `/api/deposit` | POST | Submit deposit/commit hashes to backend |
+| `/api/deposit_status` | GET | Check whether a commitment is indexed |
 | `/api/withdraw` | POST | Submit ZK proof and request guardian signature |
 | `/api/prove` | POST | Generate a Groth16 proof remotely on the backend |
 | `/api/broadcast` | POST | Publish a signed Nano block via `rpc.nano.to` |
@@ -62,35 +66,44 @@ NEXT_PUBLIC_APP_URL=https://vela-web.vercel.app
 
 ## Pre-deployment checks
 
-- [ ] `npm run build` passes locally inside `web/`.
-- [ ] `npm run lint` passes.
-- [ ] All API routes return JSON and handle errors gracefully.
-- [ ] Backend is reachable from Vercel and returns valid responses.
-- [ ] `NANO_RPC_KEY` is not exposed to the browser (only used server-side).
+- [x] `npm run build` passes locally inside `web/`.
+- [x] `npm run lint` passes.
+- [x] All API routes return JSON and handle errors gracefully.
+- [x] Backend is reachable from Vercel and returns valid responses.
+- [x] `NANO_RPC_KEY` is not exposed to the browser (only used server-side).
 
 ## Security
 
-- [ ] Security headers configured in `next.config.ts`:
+- [x] Security headers configured in `next.config.ts`:
   - `Strict-Transport-Security`
   - `X-Frame-Options: DENY`
   - `X-Content-Type-Options: nosniff`
   - `Referrer-Policy: strict-origin-when-cross-origin`
   - `Permissions-Policy`
-  - `Content-Security-Policy`
-- [ ] CORS restricted to `NEXT_PUBLIC_APP_URL`.
-- [ ] API routes validate input with Zod.
-- [ ] Rate limiting enabled on public routes.
-- [ ] No secrets logged or returned in error messages.
-- [ ] Mainnet-risk warnings shown in UI.
+  - `Content-Security-Policy` (includes `wss://ws.nano.to`)
+- [x] CORS restricted to `NEXT_PUBLIC_APP_URL`.
+- [x] API routes validate input with Zod.
+- [x] Rate limiting fallback on public routes (Redis optional).
+- [x] No secrets logged or returned in error messages.
+- [x] Mainnet-risk warnings shown in UI.
 
 ## Performance and reliability
 
-- [ ] Nano RPC calls use short-lived HTTPS requests (no `Session` keep-alive in serverless).
-- [ ] API routes timeout within Vercel limits (10 s Hobby / 60 s Pro / 900 s Enterprise).
-- [ ] ZK proving is **not** done inside Vercel functions unless using a very small circuit under timeout.
-- [ ] Backend health endpoint is monitored.
+- [x] Nano RPC calls use short-lived HTTPS requests (no `Session` keep-alive in serverless).
+- [x] API routes timeout within Vercel limits (10 s Hobby / 60 s Pro / 900 s Enterprise).
+- [x] ZK proving is **not** done inside Vercel functions.
+- [x] Backend health endpoint is monitored via `/api/greenlight`.
 - [ ] Error tracking (e.g., Sentry) integrated.
 - [ ] Vercel Analytics / Log Drains configured.
+
+## UX and flow
+
+- [x] Wallet creation/restore with browser-encrypted seed.
+- [x] Real-time funding detection via WebSocket (`wss://ws.nano.to`).
+- [x] Auto-receive of pending sends before deposit (handles unopened source accounts).
+- [x] Auto-detection of indexed deposits and automatic withdraw enable.
+- [x] Minimal user inputs: password, external funding, two taps (deposit, withdraw).
+- [x] Strict green-light check before exposing the deposit address or QR.
 
 ## DNS and domains
 
@@ -100,10 +113,11 @@ NEXT_PUBLIC_APP_URL=https://vela-web.vercel.app
 
 ## Post-deployment verification
 
-- [ ] `GET /api/health` returns `{"ok":true}`.
-- [ ] `GET /api/status` returns pool state from backend.
-- [ ] `GET /api/pool_address/1000000000000000000000000000000` returns a public key.
-- [ ] `/wallet` page loads and derives addresses from a test seed.
+- [x] `GET /api/health` returns `{"ok":true}`.
+- [x] `GET /api/status` returns pool state from backend.
+- [x] `GET /api/greenlight` returns `{"ok":true}`.
+- [x] `GET /api/pool_address/1000000000000000000000000000000` returns a public key.
+- [x] `/wallet` page loads and derives addresses from a test seed.
 - [ ] Deposit and withdraw flows work end-to-end with a funded test account.
 - [ ] Rate limit blocks abuse after threshold.
 
@@ -116,6 +130,6 @@ NEXT_PUBLIC_APP_URL=https://vela-web.vercel.app
 
 ## Next steps after this checklist
 
-1. Implement browser-side wallet integration (seed / private key input with strong warnings).
-2. Move proof generation to WASM in the browser to remove backend proving trust.
-3. Add automated E2E tests against a staging backend.
+1. Move proof generation to WASM in the browser to remove backend proving trust.
+2. Add automated E2E tests against a staging backend.
+3. Implement multi-guardian / FROST threshold signing.
