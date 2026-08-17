@@ -516,22 +516,26 @@ export default function EasyWallet() {
     return waitForBalance(newBalance);
   }
 
-  function derivedAccounts() {
+  // Withdraw accounts only (index >= 1): funds here arrived via private
+  // withdrawals and are not linkable to the public shield address. The shield
+  // address (index 0) is deliberately excluded from external sweeps — shield
+  // and withdraw those funds first to break the on-chain link.
+  function privateAccounts() {
     if (!seed) return [];
     const maxIndex = Math.max(withdrawIndex + 2, 5);
     const accounts = [];
-    for (let i = 0; i <= maxIndex; i++) accounts.push(deriveLegacyAccount(seed, i));
+    for (let i = 1; i <= maxIndex; i++) accounts.push(deriveLegacyAccount(seed, i));
     return accounts;
   }
 
-  // Total spendable (balance + receivable) across all derived accounts, so the
-  // user can see what an external send would move.
+  // Total spendable (balance + receivable) across the private withdraw
+  // accounts, so the user can see what an external send would move.
   useEffect(() => {
     if (!seed || view !== "dashboard") return;
     let alive = true;
     async function scan() {
       let total = BigInt(0);
-      for (const acct of derivedAccounts()) {
+      for (const acct of privateAccounts()) {
         try {
           const [info, pending] = await Promise.all([
             apiGet(`/api/account_info?account=${encodeURIComponent(acct.address)}`).catch(() => null),
@@ -566,7 +570,7 @@ export default function EasyWallet() {
     setStatusMessage("Sending to external address...");
     try {
       let totalSent = BigInt(0);
-      for (const acct of derivedAccounts()) {
+      for (const acct of privateAccounts()) {
         // Receive anything pending on this account first.
         const pending = await apiGet(`/api/pending?account=${encodeURIComponent(acct.address)}`).catch(() => ({ blocks: {} }));
         const pendingEntries = Object.entries((pending?.blocks ?? {}) as Record<string, { amount: string }>);
@@ -1114,13 +1118,19 @@ export default function EasyWallet() {
       <div className="mt-8 rounded-xl border border-black/10 bg-black/5 p-5">
         <h2 className="font-semibold">Send to exchange or external wallet</h2>
         <p className="mt-1 text-sm text-black/60">
-          Sweeps all funds in this wallet (including withdrawn private funds) to any Nano
-          address — e.g. your Binance XNO deposit address. Funds still in your public
-          shield address are included and are linkable to your deposits.
+          Sweeps your private (withdrawn) funds to any Nano address — e.g. your Binance
+          XNO deposit address. Your public shield address is never included, so the
+          destination cannot be linked to your deposits.
         </p>
         <p className="mt-2 text-sm text-black/70">
-          Available: {externalAvailable === null ? "..." : `${nano(externalAvailable)} XNO`}
+          Private funds available: {externalAvailable === null ? "..." : `${nano(externalAvailable)} XNO`}
         </p>
+        {BigInt(balance ?? "0") + BigInt(pendingRaw ?? "0") > BigInt(0) && (
+          <p className="mt-1 text-xs text-black/50">
+            Your shield address still holds {nano(BigInt(balance ?? "0") + BigInt(pendingRaw ?? "0"))} XNO.
+            To move it privately, shield and withdraw it first — it will then appear here as private funds.
+          </p>
+        )}
         <input
           type="text"
           placeholder="nano_... destination address"
