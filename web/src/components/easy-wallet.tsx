@@ -1320,20 +1320,9 @@ export default function EasyWallet() {
 
       <div className="mt-8 rounded-xl border border-black/10 bg-black/5 p-5">
         <h2 className="font-semibold">Send to exchange or external wallet</h2>
-        <p className="mt-1 text-sm text-black/60">
-          Sweeps your private (withdrawn) funds to any Nano address — e.g. your Binance
-          XNO deposit address. Your public shield address is never included, so the
-          destination cannot be linked to your deposits.
+        <p className="mt-3 text-2xl font-bold text-black">
+          {externalAvailable === null ? "..." : `${nano(externalAvailable)} XNO`}
         </p>
-        <p className="mt-2 text-sm text-black/70">
-          Private funds available: {externalAvailable === null ? "..." : `${nano(externalAvailable)} XNO`}
-        </p>
-        {BigInt(balance ?? "0") + BigInt(pendingRaw ?? "0") > BigInt(0) && (
-          <p className="mt-1 text-xs text-black/50">
-            Your shield address still holds {nano(BigInt(balance ?? "0") + BigInt(pendingRaw ?? "0"))} XNO.
-            To move it privately, shield and withdraw it first — it will then appear here as private funds.
-          </p>
-        )}
         <input
           type="text"
           placeholder="nano_... destination address"
