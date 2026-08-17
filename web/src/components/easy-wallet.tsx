@@ -728,45 +728,51 @@ export default function EasyWallet() {
     try {
       let totalSent = BigInt(0);
       for (const acct of privateAccounts()) {
+        // Track this account's chain locally: after we broadcast our own
+        // receive, WE know the new frontier and balance — re-fetching from the
+        // RPC races against node propagation and reports stale zeros.
+        const info = await apiGet(`/api/account_info?account=${encodeURIComponent(acct.address)}`).catch(() => null);
+        let previous: string = info?.frontier ?? ZERO_HASH;
+        let acctBalance = BigInt(info?.balance ?? "0");
+        const representative = info?.representative ?? DEFAULT_REP;
+
         // Receive anything pending on this account first.
         const pending = await apiGet(`/api/pending?account=${encodeURIComponent(acct.address)}`).catch(() => ({ blocks: {} }));
         const pendingEntries = Object.entries((pending?.blocks ?? {}) as Record<string, { amount: string }>);
         for (const [sendHash, block] of pendingEntries) {
-          const info = await apiGet(`/api/account_info?account=${encodeURIComponent(acct.address)}`).catch(() => null);
-          const previous = info?.frontier ?? ZERO_HASH;
           const isOpen = previous === ZERO_HASH;
           const workHash = workHashForReceive(previous, acct.publicKey);
           const work = await generateWorkTimed(workHash, "receive");
           const receiveBlock = buildReceiveBlock(acct.secretKey, {
             toAddress: acct.address,
             previous,
-            representative: info?.representative ?? DEFAULT_REP,
+            representative,
             transactionHash: sendHash,
-            balance: isOpen ? "0" : String(info?.balance ?? "0"),
+            balance: isOpen ? "0" : acctBalance.toString(),
             amount: String(block.amount ?? "0"),
             work,
           });
           await apiPost("/api/broadcast", { block: receiveBlock.block, subtype: "receive" });
           log(`Received pending on account ${acct.index}: ${receiveBlock.hash.slice(0, 16)}...`);
+          previous = receiveBlock.hash;
+          acctBalance += BigInt(block.amount ?? "0");
         }
 
-        const info = await apiGet(`/api/account_info?account=${encodeURIComponent(acct.address)}`).catch(() => null);
-        const balance = BigInt(info?.balance ?? "0");
-        if (!info?.frontier || balance <= BigInt(0)) continue;
+        if (previous === ZERO_HASH || acctBalance <= BigInt(0)) continue;
 
-        const work = await generateWorkTimed(info.frontier, "send");
+        const work = await generateWorkTimed(previous, "send");
         const sendBlock = buildSendBlock(acct.secretKey, {
           fromAddress: acct.address,
-          previous: info.frontier,
-          representative: info.representative || DEFAULT_REP,
+          previous,
+          representative,
           balance: "0",
           link: destination,
-          amount: balance.toString(),
+          amount: acctBalance.toString(),
           work,
         });
         await apiPost("/api/broadcast", { block: sendBlock.block, subtype: "send" });
-        totalSent += balance;
-        log(`Sent ${nano(balance)} XNO from account ${acct.index}: ${sendBlock.hash}`);
+        totalSent += acctBalance;
+        log(`Sent ${nano(acctBalance)} XNO from account ${acct.index}: ${sendBlock.hash}`);
       }
       if (totalSent === BigInt(0)) {
         log("No spendable funds found to send.");
