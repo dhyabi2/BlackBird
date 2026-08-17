@@ -22,6 +22,12 @@
     <messageFlow id="MF_GuardianToNanoRPC" sourceRef="Task_GuardianAccountInfo" targetRef="Start_NanoRPC"/>
     <messageFlow id="MF_NanoRPCToLedger" sourceRef="Task_NanoRPCBroadcast" targetRef="Start_LedgerBlock"/>
     <messageFlow id="MF_LedgerToIndexer" sourceRef="Task_LedgerConfirmed" targetRef="Start_IndexerScan"/>
+    <messageFlow id="MF_ClientNullifier" sourceRef="Task_CheckNullifierStatus" targetRef="Start_WebNullifier"/>
+    <messageFlow id="MF_ClientDepositStatus" sourceRef="Task_CheckExistingCommitment" targetRef="Start_WebDepositStatus"/>
+    <messageFlow id="MF_WebToIndexerNullifier" sourceRef="Task_WebForwardNullifier" targetRef="Start_IndexerNullifier"/>
+    <messageFlow id="MF_WebToIndexerDepositStatus" sourceRef="Task_WebForwardDepositStatus" targetRef="Start_IndexerDepositStatus"/>
+    <messageFlow id="MF_IndexerToGuardianNullifier" sourceRef="Task_IndexerProxyNullifier" targetRef="Start_GuardianNullifier"/>
+    <messageFlow id="MF_GuardianSweepToNanoRPC" sourceRef="Task_BroadcastPoolReceive" targetRef="Start_NanoRPC"/>
   </collaboration>
   <process id="Process_Client" isExecutable="false">
     <laneSet id="LaneSet_Client">
@@ -39,6 +45,8 @@
         <flowNodeRef>Task_ClientGetAccountInfo</flowNodeRef>
         <flowNodeRef>Task_ClientGetPending</flowNodeRef>
         <flowNodeRef>Task_ClientGetWork</flowNodeRef>
+        <flowNodeRef>Task_RecoverShield</flowNodeRef>
+        <flowNodeRef>Task_ExternalSweep</flowNodeRef>
       </lane>
     </laneSet>
     <startEvent id="Start_Client" name="Run e2e / user action"/>
@@ -52,6 +60,12 @@
       <task id="Task_GenerateSecrets" name="Derive n = Blake2b(seed|P_w|&quot;vela/n&quot;), t similarly"/>
       <task id="Task_FetchPoolInfo" name="Fetch pool address derived from guardian seed for denomination"/>
       <task id="Task_ComputeCommitment" name="Compute C = Poseidon(1, n, t, P_w, S_pub)"/>
+      <task id="Task_CheckNullifierStatus" name="GET /api/nullifier_status — pre-deposit check"/>
+      <exclusiveGateway id="Gateway_NullifierUnspent" name="Nullifier unspent?"/>
+      <task id="Task_CheckExistingCommitment" name="GET /api/deposit_status?commitment=C"/>
+      <exclusiveGateway id="Gateway_CommitmentNew" name="Commitment already indexed?"/>
+      <endEvent id="End_SubDepositAbort" name="Abort: pair already used (deposit would be unwithdrawable)"/>
+      <endEvent id="End_SubDepositSkip" name="Skip duplicate deposit; jump to withdraw-ready"/>
       <task id="Task_CreateDepositBlock" name="Create state send: source → pool (denom)"/>
       <task id="Task_ComputeDepositWork" name="Compute PoW on source frontier (send threshold)"/>
       <task id="Task_BroadcastDeposit" name="Broadcast deposit block"/>
@@ -63,7 +77,13 @@
       <sequenceFlow id="SD2" sourceRef="Task_DeriveStealth" targetRef="Task_GenerateSecrets"/>
       <sequenceFlow id="SD3" sourceRef="Task_GenerateSecrets" targetRef="Task_FetchPoolInfo"/>
       <sequenceFlow id="SD4" sourceRef="Task_FetchPoolInfo" targetRef="Task_ComputeCommitment"/>
-      <sequenceFlow id="SD5" sourceRef="Task_ComputeCommitment" targetRef="Task_CreateDepositBlock"/>
+      <sequenceFlow id="SD5" sourceRef="Task_ComputeCommitment" targetRef="Task_CheckNullifierStatus"/>
+      <sequenceFlow id="SD5a" sourceRef="Task_CheckNullifierStatus" targetRef="Gateway_NullifierUnspent"/>
+      <sequenceFlow id="SD5b_No" sourceRef="Gateway_NullifierUnspent" targetRef="End_SubDepositAbort" name="Spent"/>
+      <sequenceFlow id="SD5b_Yes" sourceRef="Gateway_NullifierUnspent" targetRef="Task_CheckExistingCommitment" name="Unspent"/>
+      <sequenceFlow id="SD5c" sourceRef="Task_CheckExistingCommitment" targetRef="Gateway_CommitmentNew"/>
+      <sequenceFlow id="SD5d_Yes" sourceRef="Gateway_CommitmentNew" targetRef="End_SubDepositSkip" name="Indexed"/>
+      <sequenceFlow id="SD5d_No" sourceRef="Gateway_CommitmentNew" targetRef="Task_CreateDepositBlock" name="New"/>
       <sequenceFlow id="SD6" sourceRef="Task_CreateDepositBlock" targetRef="Task_ComputeDepositWork"/>
       <sequenceFlow id="SD7" sourceRef="Task_ComputeDepositWork" targetRef="Task_BroadcastDeposit"/>
       <sequenceFlow id="SD8" sourceRef="Task_BroadcastDeposit" targetRef="Task_CreateCommitmentBlock"/>
@@ -93,6 +113,8 @@
       <sequenceFlow id="SW9" sourceRef="Task_ClientBroadcast" targetRef="End_SubWithdraw"/>
     </subProcess>
     <task id="Task_ReceiveWithdrawal" name="Create &amp; broadcast receive block to P_w (open/ receive)"/>
+    <task id="Task_RecoverShield" name="On load: recover shield state — deposit_status(C) indexed + nullifier unspent → withdraw ready"/>
+    <task id="Task_ExternalSweep" name="Sweep private withdraw accounts (index ≥ 1 only; shield address excluded) to external address (e.g. exchange)"/>
     <endEvent id="End_ClientDone" name="Cycle complete"/>
     <endEvent id="End_ClientFail" name="Insufficient balance / failure"/>
     <sequenceFlow id="C0" sourceRef="Start_Client" targetRef="Task_LoadWallets"/>
@@ -102,10 +124,12 @@
     <sequenceFlow id="C4_No" sourceRef="Gateway_HasBalance" targetRef="End_ClientFail" name="No"/>
     <sequenceFlow id="C5" sourceRef="SubProcess_Deposit" targetRef="SubProcess_Withdraw"/>
     <sequenceFlow id="C6" sourceRef="SubProcess_Withdraw" targetRef="Task_ReceiveWithdrawal"/>
-    <sequenceFlow id="C7" sourceRef="Task_ReceiveWithdrawal" targetRef="End_ClientDone"/>
+    <sequenceFlow id="C7" sourceRef="Task_ReceiveWithdrawal" targetRef="Task_ExternalSweep"/>
+    <sequenceFlow id="C8" sourceRef="Task_ExternalSweep" targetRef="End_ClientDone"/>
+    <sequenceFlow id="C9" sourceRef="Task_RecoverShield" targetRef="SubProcess_Withdraw" name="Existing shield found"/>
     <task id="Task_ClientGetAccountInfo" name="GET /api/account_info"/>
     <task id="Task_ClientGetPending" name="GET /api/pending"/>
-    <task id="Task_ClientGetWork" name="POST /api/work"/>
+    <task id="Task_ClientGetWork" name="Generate PoW locally (nano-pow: WebGPU → WebGL2 → WASM), validate with Blake2b; fallback POST /api/work"/>
     <sequenceFlow sourceRef="Task_LoadWallets" targetRef="Task_ClientGetAccountInfo" id="Flow_1000"/>
     <sequenceFlow sourceRef="Task_ClientGetAccountInfo" targetRef="Task_ClientGetPending" id="Flow_1001"/>
     <sequenceFlow sourceRef="Task_ClientGetPending" targetRef="Task_ClientGetWork" id="Flow_1002"/>
@@ -132,6 +156,11 @@
         <flowNodeRef>Task_WebForwardDeposit</flowNodeRef>
         <flowNodeRef>Task_WebForwardProve</flowNodeRef>
         <flowNodeRef>Task_WebForwardWithdraw</flowNodeRef>
+        <flowNodeRef>Start_WebNullifier</flowNodeRef>
+        <flowNodeRef>Task_ValidateNullifierReq</flowNodeRef>
+        <flowNodeRef>Task_WebForwardNullifier</flowNodeRef>
+        <flowNodeRef>Start_WebDepositStatus</flowNodeRef>
+        <flowNodeRef>Task_WebForwardDepositStatus</flowNodeRef>
         <flowNodeRef>Task_WebReturnResponse</flowNodeRef>
         <flowNodeRef>End_WebOK</flowNodeRef>
         <flowNodeRef>End_WebError</flowNodeRef>
@@ -145,10 +174,20 @@
     <task id="Task_ValidatePending" name="Validate address, rate limit"/>
     <sequenceFlow id="WP1" sourceRef="Start_WebPending" targetRef="Task_ValidatePending"/>
     <sequenceFlow id="WP2" sourceRef="Task_ValidatePending" targetRef="Task_WebCallNanoRPC"/>
-    <startEvent id="Start_WebWork" name="POST /api/work"/>
-    <task id="Task_ValidateWork" name="Validate hash &amp; difficulty, rate limit; request work from rpc.nano.to only (no local fallback)"/>
+    <startEvent id="Start_WebWork" name="POST /api/work (fallback path; client generates work locally first)"/>
+    <task id="Task_ValidateWork" name="Validate hash &amp; difficulty, rate limit; fetch work from rpc.nano.to, then validate PoW locally (Blake2b) — reject invalid upstream work with 502"/>
     <sequenceFlow id="WW1" sourceRef="Start_WebWork" targetRef="Task_ValidateWork"/>
     <sequenceFlow id="WW2" sourceRef="Task_ValidateWork" targetRef="Task_WebCallNanoRPC"/>
+    <startEvent id="Start_WebNullifier" name="GET /api/nullifier_status"/>
+    <task id="Task_ValidateNullifierReq" name="Validate nullifier hex"/>
+    <task id="Task_WebForwardNullifier" name="Forward to Indexer /api/nullifier/&lt;hex&gt; (proxied to Guardian)"/>
+    <sequenceFlow id="WN1" sourceRef="Start_WebNullifier" targetRef="Task_ValidateNullifierReq"/>
+    <sequenceFlow id="WN2" sourceRef="Task_ValidateNullifierReq" targetRef="Task_WebForwardNullifier"/>
+    <sequenceFlow id="WN3" sourceRef="Task_WebForwardNullifier" targetRef="Task_WebReturnResponse"/>
+    <startEvent id="Start_WebDepositStatus" name="GET /api/deposit_status"/>
+    <task id="Task_WebForwardDepositStatus" name="Forward to Indexer /api/deposit_status (indexed, epoch, root, leaf_index)"/>
+    <sequenceFlow id="WDS1" sourceRef="Start_WebDepositStatus" targetRef="Task_WebForwardDepositStatus"/>
+    <sequenceFlow id="WDS2" sourceRef="Task_WebForwardDepositStatus" targetRef="Task_WebReturnResponse"/>
     <startEvent id="Start_WebBroadcast" name="POST /api/broadcast"/>
     <task id="Task_ValidateBroadcast" name="Validate block shape, rate limit"/>
     <sequenceFlow id="WB1" sourceRef="Start_WebBroadcast" targetRef="Task_ValidateBroadcast"/>
@@ -224,7 +263,7 @@
       <lane id="Lane_NanoNode" name="Nano nodes">
         <flowNodeRef>Start_LedgerBlock</flowNodeRef>
         <flowNodeRef>Task_ValidateBlockFormat</flowNodeRef>
-        <flowNodeRef>Task_ValidateWork</flowNodeRef>
+        <flowNodeRef>Task_LedgerValidateWork</flowNodeRef>
         <flowNodeRef>Task_ValidateSignature</flowNodeRef>
         <flowNodeRef>Task_CheckAccountState</flowNodeRef>
         <flowNodeRef>Task_ORVConsensus</flowNodeRef>
@@ -234,15 +273,15 @@
     </laneSet>
     <startEvent id="Start_LedgerBlock" name="Block received from RPC"/>
     <task id="Task_ValidateBlockFormat" name="Validate state block fields"/>
-    <task id="Task_ValidateWork" name="Validate PoW against previous / pubkey"/>
+    <task id="Task_LedgerValidateWork" name="Validate PoW against previous / pubkey"/>
     <task id="Task_ValidateSignature" name="Validate Ed25519-blake2b signature"/>
     <task id="Task_CheckAccountState" name="Check balance, previous, link"/>
     <task id="Task_ORVConsensus" name="Open Representative Voting consensus"/>
     <task id="Task_LedgerConfirmed" name="Confirm block"/>
     <endEvent id="End_LedgerBlock" name="Confirmed on-chain"/>
     <sequenceFlow id="L1" sourceRef="Start_LedgerBlock" targetRef="Task_ValidateBlockFormat"/>
-    <sequenceFlow id="L2" sourceRef="Task_ValidateBlockFormat" targetRef="Task_ValidateWork"/>
-    <sequenceFlow id="L3" sourceRef="Task_ValidateWork" targetRef="Task_ValidateSignature"/>
+    <sequenceFlow id="L2" sourceRef="Task_ValidateBlockFormat" targetRef="Task_LedgerValidateWork"/>
+    <sequenceFlow id="L3" sourceRef="Task_LedgerValidateWork" targetRef="Task_ValidateSignature"/>
     <sequenceFlow id="L4" sourceRef="Task_ValidateSignature" targetRef="Task_CheckAccountState"/>
     <sequenceFlow id="L5" sourceRef="Task_CheckAccountState" targetRef="Task_ORVConsensus"/>
     <sequenceFlow id="L6" sourceRef="Task_ORVConsensus" targetRef="Task_LedgerConfirmed"/>
@@ -267,6 +306,10 @@
         <flowNodeRef>Task_IndexerDepositVerify</flowNodeRef>
         <flowNodeRef>Gateway_DepositKnown</flowNodeRef>
         <flowNodeRef>Task_IndexerDepositAdd</flowNodeRef>
+        <flowNodeRef>Start_IndexerNullifier</flowNodeRef>
+        <flowNodeRef>Task_IndexerProxyNullifier</flowNodeRef>
+        <flowNodeRef>Start_IndexerDepositStatus</flowNodeRef>
+        <flowNodeRef>Task_IndexerDepositStatusLookup</flowNodeRef>
         <flowNodeRef>Start_IndexerProve</flowNodeRef>
         <flowNodeRef>Task_FetchMerkleProof</flowNodeRef>
         <flowNodeRef>Task_GenerateProofInputs</flowNodeRef>
@@ -313,6 +356,16 @@
     <sequenceFlow id="ID3_No" sourceRef="Gateway_DepositKnown" targetRef="End_IndexerDepositReject" name="No"/>
     <sequenceFlow id="ID3_Yes" sourceRef="Gateway_DepositKnown" targetRef="Task_IndexerDepositAdd" name="Yes"/>
     <sequenceFlow id="ID4" sourceRef="Task_IndexerDepositAdd" targetRef="End_IndexerDepositOK"/>
+    <startEvent id="Start_IndexerNullifier" name="GET /api/nullifier/&lt;hex&gt;"/>
+    <task id="Task_IndexerProxyNullifier" name="require_api_key + proxy to Guardian /nullifier/&lt;hex&gt;"/>
+    <endEvent id="End_IndexerNullifierOK" name="Return {nullifier, spent}"/>
+    <sequenceFlow id="IN1" sourceRef="Start_IndexerNullifier" targetRef="Task_IndexerProxyNullifier"/>
+    <sequenceFlow id="IN2" sourceRef="Task_IndexerProxyNullifier" targetRef="End_IndexerNullifierOK"/>
+    <startEvent id="Start_IndexerDepositStatus" name="GET/POST /api/deposit_status"/>
+    <task id="Task_IndexerDepositStatusLookup" name="Verify pair or look up commitment; return indexed, epoch, denom, root, leaf_index (per-tree lookup)"/>
+    <endEvent id="End_IndexerDepositStatusOK" name="Return status"/>
+    <sequenceFlow id="IDS1" sourceRef="Start_IndexerDepositStatus" targetRef="Task_IndexerDepositStatusLookup"/>
+    <sequenceFlow id="IDS2" sourceRef="Task_IndexerDepositStatusLookup" targetRef="End_IndexerDepositStatusOK"/>
     <startEvent id="Start_IndexerProve" name="POST /api/prove"/>
     <task id="Task_FetchMerkleProof" name="get_proof(epoch, denom, C)"/>
     <task id="Task_GenerateProofInputs" name="Build snarkjs input signals (root, nullifier, limbs, path, indices)"/>
@@ -348,6 +401,14 @@
         <flowNodeRef>End_GuardianRejected</flowNodeRef>
         <flowNodeRef>Task_VerifyZKProof</flowNodeRef>
         <flowNodeRef>Gateway_ProofValid</flowNodeRef>
+        <flowNodeRef>Task_ReceivePoolOnDemand</flowNodeRef>
+        <flowNodeRef>Start_GuardianSweep</flowNodeRef>
+        <flowNodeRef>Task_CheckPoolReceivable</flowNodeRef>
+        <flowNodeRef>Task_GenerateReceiveWork</flowNodeRef>
+        <flowNodeRef>Task_SignPoolReceive</flowNodeRef>
+        <flowNodeRef>Task_BroadcastPoolReceive</flowNodeRef>
+        <flowNodeRef>Start_GuardianNullifier</flowNodeRef>
+        <flowNodeRef>Task_ReturnNullifierStatus</flowNodeRef>
       </lane>
     </laneSet>
     <startEvent id="Start_GuardianWithdraw" name="POST /withdraw"/>
@@ -360,8 +421,27 @@
     <exclusiveGateway id="Gateway_NullifierFresh" name="Fresh?"/>
     <task id="Task_VerifyZKProof" name="snarkjs verify(proof, publicSignals)"/>
     <exclusiveGateway id="Gateway_ProofValid" name="Proof valid?"/>
+    <task id="Task_ReceivePoolOnDemand" name="If pool unopened or balance short: receive_pool_pending(denom) first"/>
     <task id="Task_GuardianAccountInfo" name="Get pool account_info (frontier, balance, rep)"/>
     <task id="Task_ComputeNewBalance" name="new_balance = balance - denom (0% fee)"/>
+    <startEvent id="Start_GuardianSweep" name="Every 30s (background pool receive loop)">
+      <timerEventDefinition id="Timer_GuardianSweep"/>
+    </startEvent>
+    <task id="Task_CheckPoolReceivable" name="For each denomination: query receivable for pool address"/>
+    <task id="Task_GenerateReceiveWork" name="Generate receive-difficulty PoW (CPU Blake2b, LE nonce)"/>
+    <task id="Task_SignPoolReceive" name="Build + sign state receive block with pool key"/>
+    <task id="Task_BroadcastPoolReceive" name="Broadcast receive via Nano RPC (process)"/>
+    <endEvent id="End_GuardianSweep" name="Pool deposits received"/>
+    <sequenceFlow id="GS1" sourceRef="Start_GuardianSweep" targetRef="Task_CheckPoolReceivable"/>
+    <sequenceFlow id="GS2" sourceRef="Task_CheckPoolReceivable" targetRef="Task_GenerateReceiveWork"/>
+    <sequenceFlow id="GS3" sourceRef="Task_GenerateReceiveWork" targetRef="Task_SignPoolReceive"/>
+    <sequenceFlow id="GS4" sourceRef="Task_SignPoolReceive" targetRef="Task_BroadcastPoolReceive"/>
+    <sequenceFlow id="GS5" sourceRef="Task_BroadcastPoolReceive" targetRef="End_GuardianSweep"/>
+    <startEvent id="Start_GuardianNullifier" name="GET /nullifier/&lt;hex&gt;"/>
+    <task id="Task_ReturnNullifierStatus" name="require_api_key + return {nullifier, spent: N in spent_nullifiers}"/>
+    <endEvent id="End_GuardianNullifier" name="Status returned"/>
+    <sequenceFlow id="GN1" sourceRef="Start_GuardianNullifier" targetRef="Task_ReturnNullifierStatus"/>
+    <sequenceFlow id="GN2" sourceRef="Task_ReturnNullifierStatus" targetRef="End_GuardianNullifier"/>
     <task id="Task_HashBlock" name="block_hash = Blake2b(32-byte preamble|account|previous|rep|balance|link=P_w)"/>
     <task id="Task_SignBlock" name="Sign block_hash with pool Ed25519-blake2b key"/>
     <task id="Task_MarkNullifier" name="Move nullifier from pending to spent after successful broadcast"/>
@@ -383,7 +463,8 @@
     <sequenceFlow id="GU8_Yes" sourceRef="Gateway_NullifierFresh" targetRef="Task_VerifyZKProof" name="Yes"/>
     <sequenceFlow id="GU9" sourceRef="Task_VerifyZKProof" targetRef="Gateway_ProofValid"/>
     <sequenceFlow id="GU10_No" sourceRef="Gateway_ProofValid" targetRef="Task_RejectRequest" name="No"/>
-    <sequenceFlow id="GU10_Yes" sourceRef="Gateway_ProofValid" targetRef="Task_GuardianAccountInfo" name="Yes"/>
+    <sequenceFlow id="GU10_Yes" sourceRef="Gateway_ProofValid" targetRef="Task_ReceivePoolOnDemand" name="Yes"/>
+    <sequenceFlow id="GU10b" sourceRef="Task_ReceivePoolOnDemand" targetRef="Task_GuardianAccountInfo"/>
     <sequenceFlow id="GU11" sourceRef="Task_GuardianAccountInfo" targetRef="Task_ComputeNewBalance"/>
     <sequenceFlow id="GU12" sourceRef="Task_ComputeNewBalance" targetRef="Task_HashBlock"/>
     <sequenceFlow id="GU13" sourceRef="Task_HashBlock" targetRef="Task_SignBlock"/>
@@ -396,19 +477,19 @@
   <bpmndi:BPMNDiagram id="BPMNDiagram_1" name="BlackBird Full Architecture">
     <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Collaboration_1">
       <bpmndi:BPMNShape id="Participant_Client_di" bpmnElement="Participant_Client" isHorizontal="true">
-        <omgdc:Bounds x="80" y="80" width="1700" height="260"/>
+        <omgdc:Bounds x="80" y="80" width="2260" height="260"/>
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="Participant_WebApp_di" bpmnElement="Participant_WebApp" isHorizontal="true">
-        <omgdc:Bounds x="80" y="360" width="1700" height="300"/>
+        <omgdc:Bounds x="80" y="360" width="2260" height="300"/>
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="Participant_NanoRPC_di" bpmnElement="Participant_NanoRPC" isHorizontal="true">
         <omgdc:Bounds x="80" y="680" width="1700" height="240"/>
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="Participant_Indexer_di" bpmnElement="Participant_Indexer" isHorizontal="true">
-        <omgdc:Bounds x="80" y="940" width="1700" height="320"/>
+        <omgdc:Bounds x="80" y="940" width="2260" height="320"/>
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="Participant_Guardian_di" bpmnElement="Participant_Guardian" isHorizontal="true">
-        <omgdc:Bounds x="80" y="1280" width="1700" height="300"/>
+        <omgdc:Bounds x="80" y="1280" width="2260" height="300"/>
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="Participant_Ledger_di" bpmnElement="Participant_Ledger" isHorizontal="true">
         <omgdc:Bounds x="80" y="1620" width="1700" height="240"/>
@@ -620,7 +701,7 @@
       <bpmndi:BPMNShape id="Task_ValidateBlockFormat_di" bpmnElement="Task_ValidateBlockFormat">
         <omgdc:Bounds x="340" y="1680" width="130" height="80"/>
       </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="Task_ValidateWork_di" bpmnElement="Task_ValidateWork">
+      <bpmndi:BPMNShape id="Task_LedgerValidateWork_di" bpmnElement="Task_LedgerValidateWork">
         <omgdc:Bounds x="520" y="1680" width="130" height="80"/>
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="Task_ValidateSignature_di" bpmnElement="Task_ValidateSignature">
@@ -1302,6 +1383,217 @@
       <bpmndi:BPMNEdge id="GU18_di" bpmnElement="GU18">
         <omgdi:waypoint x="200" y="200"/>
         <omgdi:waypoint x="300" y="200"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="Task_RecoverShield_di" bpmnElement="Task_RecoverShield">
+        <omgdc:Bounds x="1800" y="120" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ExternalSweep_di" bpmnElement="Task_ExternalSweep">
+        <omgdc:Bounds x="1960" y="120" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_CheckNullifierStatus_di" bpmnElement="Task_CheckNullifierStatus">
+        <omgdc:Bounds x="1800" y="230" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_NullifierUnspent_di" bpmnElement="Gateway_NullifierUnspent">
+        <omgdc:Bounds x="1960" y="245" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_CheckExistingCommitment_di" bpmnElement="Task_CheckExistingCommitment">
+        <omgdc:Bounds x="2040" y="230" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_CommitmentNew_di" bpmnElement="Gateway_CommitmentNew">
+        <omgdc:Bounds x="2200" y="245" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_SubDepositAbort_di" bpmnElement="End_SubDepositAbort">
+        <omgdc:Bounds x="1967" y="130" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_SubDepositSkip_di" bpmnElement="End_SubDepositSkip">
+        <omgdc:Bounds x="2280" y="180" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_WebNullifier_di" bpmnElement="Start_WebNullifier">
+        <omgdc:Bounds x="1800" y="400" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ValidateNullifierReq_di" bpmnElement="Task_ValidateNullifierReq">
+        <omgdc:Bounds x="1860" y="380" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_WebForwardNullifier_di" bpmnElement="Task_WebForwardNullifier">
+        <omgdc:Bounds x="2010" y="380" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_WebDepositStatus_di" bpmnElement="Start_WebDepositStatus">
+        <omgdc:Bounds x="1800" y="540" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_WebForwardDepositStatus_di" bpmnElement="Task_WebForwardDepositStatus">
+        <omgdc:Bounds x="1860" y="520" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_IndexerNullifier_di" bpmnElement="Start_IndexerNullifier">
+        <omgdc:Bounds x="1800" y="990" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_IndexerProxyNullifier_di" bpmnElement="Task_IndexerProxyNullifier">
+        <omgdc:Bounds x="1860" y="970" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_IndexerNullifierOK_di" bpmnElement="End_IndexerNullifierOK">
+        <omgdc:Bounds x="2010" y="990" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_IndexerDepositStatus_di" bpmnElement="Start_IndexerDepositStatus">
+        <omgdc:Bounds x="1800" y="1120" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_IndexerDepositStatusLookup_di" bpmnElement="Task_IndexerDepositStatusLookup">
+        <omgdc:Bounds x="1860" y="1100" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_IndexerDepositStatusOK_di" bpmnElement="End_IndexerDepositStatusOK">
+        <omgdc:Bounds x="2010" y="1120" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ReceivePoolOnDemand_di" bpmnElement="Task_ReceivePoolOnDemand">
+        <omgdc:Bounds x="1800" y="1300" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_GuardianSweep_di" bpmnElement="Start_GuardianSweep">
+        <omgdc:Bounds x="1800" y="1440" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_CheckPoolReceivable_di" bpmnElement="Task_CheckPoolReceivable">
+        <omgdc:Bounds x="1860" y="1420" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_GenerateReceiveWork_di" bpmnElement="Task_GenerateReceiveWork">
+        <omgdc:Bounds x="2010" y="1420" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_SignPoolReceive_di" bpmnElement="Task_SignPoolReceive">
+        <omgdc:Bounds x="2160" y="1420" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_BroadcastPoolReceive_di" bpmnElement="Task_BroadcastPoolReceive">
+        <omgdc:Bounds x="2160" y="1300" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_GuardianSweep_di" bpmnElement="End_GuardianSweep">
+        <omgdc:Bounds x="2300" y="1322" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_GuardianNullifier_di" bpmnElement="Start_GuardianNullifier">
+        <omgdc:Bounds x="1660" y="1440" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ReturnNullifierStatus_di" bpmnElement="Task_ReturnNullifierStatus">
+        <omgdc:Bounds x="1660" y="1300" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_GuardianNullifier_di" bpmnElement="End_GuardianNullifier">
+        <omgdc:Bounds x="1610" y="1322" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="SD5a_di" bpmnElement="SD5a">
+        <omgdi:waypoint x="1930" y="270"/>
+        <omgdi:waypoint x="1960" y="270"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SD5b_No_di" bpmnElement="SD5b_No">
+        <omgdi:waypoint x="1985" y="245"/>
+        <omgdi:waypoint x="1985" y="166"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SD5b_Yes_di" bpmnElement="SD5b_Yes">
+        <omgdi:waypoint x="2010" y="270"/>
+        <omgdi:waypoint x="2040" y="270"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SD5c_di" bpmnElement="SD5c">
+        <omgdi:waypoint x="2170" y="270"/>
+        <omgdi:waypoint x="2200" y="270"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SD5d_Yes_di" bpmnElement="SD5d_Yes">
+        <omgdi:waypoint x="2250" y="270"/>
+        <omgdi:waypoint x="2298" y="216"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="SD5d_No_di" bpmnElement="SD5d_No">
+        <omgdi:waypoint x="2225" y="295"/>
+        <omgdi:waypoint x="1010" y="290"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="C8_di" bpmnElement="C8">
+        <omgdi:waypoint x="2090" y="160"/>
+        <omgdi:waypoint x="2160" y="160"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="C9_di" bpmnElement="C9">
+        <omgdi:waypoint x="1865" y="200"/>
+        <omgdi:waypoint x="1200" y="430"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="WN1_di" bpmnElement="WN1">
+        <omgdi:waypoint x="1836" y="418"/>
+        <omgdi:waypoint x="1860" y="420"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="WN2_di" bpmnElement="WN2">
+        <omgdi:waypoint x="1990" y="420"/>
+        <omgdi:waypoint x="2010" y="420"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="WN3_di" bpmnElement="WN3">
+        <omgdi:waypoint x="2075" y="460"/>
+        <omgdi:waypoint x="1500" y="560"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="WDS1_di" bpmnElement="WDS1">
+        <omgdi:waypoint x="1836" y="558"/>
+        <omgdi:waypoint x="1860" y="560"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="WDS2_di" bpmnElement="WDS2">
+        <omgdi:waypoint x="1925" y="600"/>
+        <omgdi:waypoint x="1500" y="560"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IN1_di" bpmnElement="IN1">
+        <omgdi:waypoint x="1836" y="1008"/>
+        <omgdi:waypoint x="1860" y="1010"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IN2_di" bpmnElement="IN2">
+        <omgdi:waypoint x="1990" y="1010"/>
+        <omgdi:waypoint x="2010" y="1008"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IDS1_di" bpmnElement="IDS1">
+        <omgdi:waypoint x="1836" y="1138"/>
+        <omgdi:waypoint x="1860" y="1140"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="IDS2_di" bpmnElement="IDS2">
+        <omgdi:waypoint x="1990" y="1140"/>
+        <omgdi:waypoint x="2010" y="1138"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GU10b_di" bpmnElement="GU10b">
+        <omgdi:waypoint x="1800" y="1340"/>
+        <omgdi:waypoint x="1400" y="1400"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GS1_di" bpmnElement="GS1">
+        <omgdi:waypoint x="1836" y="1458"/>
+        <omgdi:waypoint x="1860" y="1460"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GS2_di" bpmnElement="GS2">
+        <omgdi:waypoint x="1990" y="1460"/>
+        <omgdi:waypoint x="2010" y="1460"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GS3_di" bpmnElement="GS3">
+        <omgdi:waypoint x="2140" y="1460"/>
+        <omgdi:waypoint x="2160" y="1460"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GS4_di" bpmnElement="GS4">
+        <omgdi:waypoint x="2225" y="1420"/>
+        <omgdi:waypoint x="2225" y="1380"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GS5_di" bpmnElement="GS5">
+        <omgdi:waypoint x="2290" y="1340"/>
+        <omgdi:waypoint x="2300" y="1340"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GN1_di" bpmnElement="GN1">
+        <omgdi:waypoint x="1696" y="1458"/>
+        <omgdi:waypoint x="1725" y="1380"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="GN2_di" bpmnElement="GN2">
+        <omgdi:waypoint x="1660" y="1340"/>
+        <omgdi:waypoint x="1646" y="1340"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_ClientNullifier_di" bpmnElement="MF_ClientNullifier">
+        <omgdi:waypoint x="1865" y="310"/>
+        <omgdi:waypoint x="1818" y="400"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_ClientDepositStatus_di" bpmnElement="MF_ClientDepositStatus">
+        <omgdi:waypoint x="2105" y="310"/>
+        <omgdi:waypoint x="1818" y="540"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_WebToIndexerNullifier_di" bpmnElement="MF_WebToIndexerNullifier">
+        <omgdi:waypoint x="2075" y="460"/>
+        <omgdi:waypoint x="1818" y="990"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_WebToIndexerDepositStatus_di" bpmnElement="MF_WebToIndexerDepositStatus">
+        <omgdi:waypoint x="1925" y="600"/>
+        <omgdi:waypoint x="1818" y="1120"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_IndexerToGuardianNullifier_di" bpmnElement="MF_IndexerToGuardianNullifier">
+        <omgdi:waypoint x="1925" y="1050"/>
+        <omgdi:waypoint x="1678" y="1440"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_GuardianSweepToNanoRPC_di" bpmnElement="MF_GuardianSweepToNanoRPC">
+        <omgdi:waypoint x="2225" y="1300"/>
+        <omgdi:waypoint x="400" y="740"/>
       </bpmndi:BPMNEdge>
     </bpmndi:BPMNPlane>
   </bpmndi:BPMNDiagram>
