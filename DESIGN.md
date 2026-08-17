@@ -1,4 +1,4 @@
-# VELA v2 Design
+# BlackBird Design
 
 A decentralized privacy layer for Nano (XNO). Users deposit into a common pool and later withdraw to fresh addresses using Groth16 zero-knowledge proofs. No single machine ever controls the pool key.
 
