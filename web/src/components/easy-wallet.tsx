@@ -10,6 +10,7 @@ import {
   rawToNano,
   nanoToRaw,
   validateWork,
+  isValidAddress,
 } from "@/lib/wallet";
 import { encryptSeed, decryptSeed } from "@/lib/crypto-storage";
 import { createBackupPhrase, phraseToSeedHex } from "@/lib/mnemonic";
@@ -186,6 +187,8 @@ export default function EasyWallet() {
   const [depositTx, setDepositTx] = useState<{ depositHash: string; commitHash: string } | null>(null);
   const [withdrawTx, setWithdrawTx] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [externalAddress, setExternalAddress] = useState("");
+  const [externalAvailable, setExternalAvailable] = useState<bigint | null>(null);
   const [greenlight, setGreenlight] = useState<{ ok: boolean; error?: string } | null>(null);
   const [feeBps, setFeeBps] = useState(0);
 
@@ -511,6 +514,112 @@ export default function EasyWallet() {
     log("Receive broadcasted");
 
     return waitForBalance(newBalance);
+  }
+
+  function derivedAccounts() {
+    if (!seed) return [];
+    const maxIndex = Math.max(withdrawIndex + 2, 5);
+    const accounts = [];
+    for (let i = 0; i <= maxIndex; i++) accounts.push(deriveLegacyAccount(seed, i));
+    return accounts;
+  }
+
+  // Total spendable (balance + receivable) across all derived accounts, so the
+  // user can see what an external send would move.
+  useEffect(() => {
+    if (!seed || view !== "dashboard") return;
+    let alive = true;
+    async function scan() {
+      let total = BigInt(0);
+      for (const acct of derivedAccounts()) {
+        try {
+          const [info, pending] = await Promise.all([
+            apiGet(`/api/account_info?account=${encodeURIComponent(acct.address)}`).catch(() => null),
+            apiGet(`/api/pending?account=${encodeURIComponent(acct.address)}`).catch(() => ({ blocks: {} })),
+          ]);
+          total += BigInt(info?.balance ?? "0");
+          for (const block of Object.values((pending?.blocks ?? {}) as Record<string, { amount: string }>)) {
+            total += BigInt(block.amount ?? "0");
+          }
+        } catch {
+          // skip unreachable accounts
+        }
+      }
+      if (alive) setExternalAvailable(total);
+    }
+    scan();
+    const id = setInterval(scan, 15_000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed, view, withdrawIndex]);
+
+  async function handleExternalSend() {
+    const destination = externalAddress.trim();
+    if (!isValidAddress(destination)) {
+      log("ERROR: Invalid destination address");
+      return;
+    }
+    setBusy(true);
+    setStatusMessage("Sending to external address...");
+    try {
+      let totalSent = BigInt(0);
+      for (const acct of derivedAccounts()) {
+        // Receive anything pending on this account first.
+        const pending = await apiGet(`/api/pending?account=${encodeURIComponent(acct.address)}`).catch(() => ({ blocks: {} }));
+        const pendingEntries = Object.entries((pending?.blocks ?? {}) as Record<string, { amount: string }>);
+        for (const [sendHash, block] of pendingEntries) {
+          const info = await apiGet(`/api/account_info?account=${encodeURIComponent(acct.address)}`).catch(() => null);
+          const previous = info?.frontier ?? ZERO_HASH;
+          const isOpen = previous === ZERO_HASH;
+          const workHash = workHashForReceive(previous, acct.publicKey);
+          const work = await generateWork(workHash, "receive");
+          const receiveBlock = buildReceiveBlock(acct.secretKey, {
+            toAddress: acct.address,
+            previous,
+            representative: info?.representative ?? DEFAULT_REP,
+            transactionHash: sendHash,
+            balance: isOpen ? "0" : String(info?.balance ?? "0"),
+            amount: String(block.amount ?? "0"),
+            work,
+          });
+          await apiPost("/api/broadcast", { block: receiveBlock.block, subtype: "receive" });
+          log(`Received pending on account ${acct.index}: ${receiveBlock.hash.slice(0, 16)}...`);
+        }
+
+        const info = await apiGet(`/api/account_info?account=${encodeURIComponent(acct.address)}`).catch(() => null);
+        const balance = BigInt(info?.balance ?? "0");
+        if (!info?.frontier || balance <= BigInt(0)) continue;
+
+        const work = await generateWork(info.frontier, "send");
+        const sendBlock = buildSendBlock(acct.secretKey, {
+          fromAddress: acct.address,
+          previous: info.frontier,
+          representative: info.representative || DEFAULT_REP,
+          balance: "0",
+          link: destination,
+          amount: balance.toString(),
+          work,
+        });
+        await apiPost("/api/broadcast", { block: sendBlock.block, subtype: "send" });
+        totalSent += balance;
+        log(`Sent ${nano(balance)} XNO from account ${acct.index}: ${sendBlock.hash}`);
+      }
+      if (totalSent === BigInt(0)) {
+        log("No spendable funds found to send.");
+        setStatusMessage(null);
+      } else {
+        log(`Total sent to ${destination}: ${nano(totalSent)} XNO`);
+        setStatusMessage(`Sent ${nano(totalSent)} XNO. It will appear at the destination shortly.`);
+      }
+    } catch (err) {
+      setStatusMessage(null);
+      log(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function handleDeposit() {
@@ -1000,6 +1109,35 @@ export default function EasyWallet() {
             )}
           </div>
         </div>
+      </div>
+
+      <div className="mt-8 rounded-xl border border-black/10 bg-black/5 p-5">
+        <h2 className="font-semibold">Send to exchange or external wallet</h2>
+        <p className="mt-1 text-sm text-black/60">
+          Sweeps all funds in this wallet (including withdrawn private funds) to any Nano
+          address — e.g. your Binance XNO deposit address. Funds still in your public
+          shield address are included and are linkable to your deposits.
+        </p>
+        <p className="mt-2 text-sm text-black/70">
+          Available: {externalAvailable === null ? "..." : `${nano(externalAvailable)} XNO`}
+        </p>
+        <input
+          type="text"
+          placeholder="nano_... destination address"
+          value={externalAddress}
+          onChange={(e) => setExternalAddress(e.target.value)}
+          className={`${inputClass} mt-3 font-mono`}
+        />
+        {externalAddress.trim() !== "" && !isValidAddress(externalAddress) && (
+          <p className="mt-1 text-xs text-red-600">Not a valid Nano address</p>
+        )}
+        <Button
+          onClick={handleExternalSend}
+          disabled={busy || !isValidAddress(externalAddress) || !externalAvailable || externalAvailable === BigInt(0)}
+          className="mt-3 w-full"
+        >
+          {busy ? "Working..." : "Send all to this address"}
+        </Button>
       </div>
 
       {phrase && (

@@ -182,6 +182,10 @@ export function buildReceiveBlock(
   };
 }
 
+export function isValidAddress(address: string): boolean {
+  return tools.validateAddress(ensureNanoPrefix(address.trim()));
+}
+
 export function publicKeyToAddress(publicKey: string): string {
   const clean = publicKey.replace(/^0x/, "").toUpperCase();
   return tools.publicKeyToAddress(clean);
