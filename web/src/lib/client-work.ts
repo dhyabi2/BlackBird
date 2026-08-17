@@ -18,7 +18,7 @@ function getWorker(): Worker | null {
   if (typeof window === "undefined" || workerBroken) return null;
   if (powWorker) return powWorker;
   try {
-    powWorker = new Worker(new URL("./work.worker.ts", import.meta.url));
+    powWorker = new Worker(new URL("./work.worker.ts", import.meta.url), { type: "module" });
     powWorker.onmessage = (event: MessageEvent<{ id: number; work: string | null }>) => {
       const resolve = pendingRequests.get(event.data.id);
       if (resolve) {
@@ -57,8 +57,12 @@ async function generateInline(hash: string, threshold: string): Promise<string |
   try {
     nanoPowModule ??= import("nano-pow");
     const { NanoPow } = await nanoPowModule;
+    // Force the WASM backend when running on the main thread: nano-pow's
+    // WebGL path performs blocking GPU readbacks that freeze the page, while
+    // WASM runs in its own workers. Slower, but never locks the UI.
     const result = await NanoPow.work_generate(hash, {
       difficulty: BigInt("0x" + threshold.toLowerCase()),
+      api: "wasm",
     });
     if (!result || "error" in result || !result.work) return null;
     return result.work;

@@ -213,6 +213,24 @@ export default function EasyWallet() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [externalAddress, setExternalAddress] = useState("");
   const [activeAction, setActiveAction] = useState<"deposit" | "withdraw" | "external" | null>(null);
+
+  // The withdraw account index advances with every completed withdrawal and
+  // must survive reloads: a stale index points at a burned (spent) pair.
+  useEffect(() => {
+    try {
+      const saved = Number(localStorage.getItem("blackbird_withdraw_index_v1"));
+      if (Number.isInteger(saved) && saved > 1) setWithdrawIndex(saved);
+    } catch {
+      // localStorage unavailable — session-only index
+    }
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem("blackbird_withdraw_index_v1", String(withdrawIndex));
+    } catch {
+      // best-effort
+    }
+  }, [withdrawIndex]);
   const [externalAvailable, setExternalAvailable] = useState<bigint | null>(null);
   const [greenlight, setGreenlight] = useState<{ ok: boolean; error?: string } | null>(null);
   const [feeBps, setFeeBps] = useState(0);
@@ -727,25 +745,30 @@ export default function EasyWallet() {
       const poolData = await apiGet(`/api/pool_address/${effectiveDenom}`);
       const poolPubHex = poolData.pool_pubkey as string;
       const S_pub = hexToBytes(poolPubHex);
-      const P_w = hexToBytes(withdraw.publicKey);
-      const n = deriveSecretBytes(seed!, withdraw.publicKey, "vela/n");
-      const t = deriveSecretBytes(seed!, withdraw.publicKey, "vela/t");
+
+      // A (source, withdraw key) pair maps to one nullifier forever, and each
+      // successful withdrawal burns its pair. Auto-advance to the first fresh
+      // withdraw account instead of dead-ending on a spent one.
+      let wIdx = withdrawIndex;
+      let withdrawAcct = deriveLegacyAccount(seed!, wIdx);
+      let n = deriveSecretBytes(seed!, withdrawAcct.publicKey, "vela/n");
+      for (let tries = 0; tries < 20; tries++) {
+        const nullStatus = await apiGet(
+          `/api/nullifier_status?nullifier=${computeNullifier(n).toString(16)}`
+        ).catch(() => null);
+        if (!nullStatus?.spent) break;
+        log(`Withdraw account ${wIdx} already used; advancing to ${wIdx + 1}.`);
+        wIdx++;
+        withdrawAcct = deriveLegacyAccount(seed!, wIdx);
+        n = deriveSecretBytes(seed!, withdrawAcct.publicKey, "vela/n");
+      }
+      if (wIdx !== withdrawIndex) setWithdrawIndex(wIdx);
+
+      const P_w = hexToBytes(withdrawAcct.publicKey);
+      const t = deriveSecretBytes(seed!, withdrawAcct.publicKey, "vela/t");
       const C = computeCommitment(n, t, P_w, S_pub);
       const C_hex = C.toString(16).padStart(64, "0");
       log(`Commitment: ${C_hex.slice(0, 16)}...`);
-
-      // A (source, withdraw key) pair maps to one nullifier forever. If it was
-      // already spent, a new deposit could never be withdrawn — refuse now,
-      // before any funds move.
-      const nullifierCheck = computeNullifier(n);
-      const nullStatus = await apiGet(
-        `/api/nullifier_status?nullifier=${nullifierCheck.toString(16)}`
-      ).catch(() => null);
-      if (nullStatus?.spent) {
-        throw new Error(
-          `This shield/withdraw pair was already used (nullifier spent). Switch to a fresh withdraw account (index ${withdrawIndex + 1}) before depositing.`
-        );
-      }
 
       // If this commitment is already indexed, a second identical deposit
       // would be deduplicated and its funds unrecoverable — skip straight to
