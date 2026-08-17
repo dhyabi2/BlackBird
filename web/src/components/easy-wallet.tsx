@@ -43,32 +43,40 @@ async function generateWork(hash: string, subtype: "send" | "receive"): Promise<
   }
   const difficulty = subtype === "send" ? SEND_THRESHOLD : RECEIVE_THRESHOLD;
 
-  // Server-first: the backend keeps a pre-warmed work cache (pool frontiers,
-  // post-broadcast roots) and computes receive-difficulty work on demand, so
-  // most requests return instantly without any device computation.
-  try {
-    const res = await apiPost("/api/work", { hash, difficulty });
-    if (res.work && /^[0-9a-fA-F]{16}$/.test(res.work)) return res.work;
-  } catch {
-    // Server has no work ready (it queued it) — generate on device.
-  }
+  // Race the server work service (pre-warmed cache / on-demand compute)
+  // against device generation (WebGPU/WebGL2/WASM in a worker). Whichever
+  // produces valid work first wins — a warm server cache returns in <1s,
+  // while a cold cache lets a fast GPU finish long before the server.
+  const DEADLINE_MS = 180_000;
 
-  // Device fallback (WebGPU/WebGL2/WASM in a worker). PoW time is
-  // probabilistic, so retry locally with escalating timeouts — nano-pow
-  // keeps computing after a timeout and caches per hash, making retries cheap.
-  const timeouts = [45_000, 90_000, 180_000];
-  let lastError: Error | null = null;
-  for (const timeoutMs of timeouts) {
-    const local = await generateLocalWork(hash, difficulty, timeoutMs);
-    if (local) return local;
-    try {
-      const res = await apiPost("/api/work", { hash, difficulty });
-      if (res.work && /^[0-9a-fA-F]{16}$/.test(res.work)) return res.work;
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
+  const serverAttempt = (async (): Promise<string | null> => {
+    const deadline = Date.now() + DEADLINE_MS;
+    while (Date.now() < deadline) {
+      try {
+        const res = await apiPost("/api/work", { hash, difficulty });
+        if (res.work && validateWork(res.work, hash, difficulty)) return res.work;
+      } catch {
+        // Not ready yet — the request also queued background computation.
+      }
+      await new Promise((r) => setTimeout(r, 4000));
     }
-  }
-  throw lastError ?? new Error("Work generation failed after multiple attempts");
+    return null;
+  })();
+
+  const deviceAttempt = generateLocalWork(hash, difficulty, DEADLINE_MS);
+
+  const work = await new Promise<string | null>((resolve) => {
+    let unresolved = 2;
+    const settle = (w: string | null) => {
+      if (w) resolve(w);
+      else if (--unresolved === 0) resolve(null);
+    };
+    serverAttempt.then(settle, () => settle(null));
+    deviceAttempt.then(settle, () => settle(null));
+  });
+
+  if (!work) throw new Error("Work generation failed on both server and device");
+  return work;
 }
 
 const DENOMINATIONS = [

@@ -182,6 +182,7 @@ class VelaGuardian:
             previous = block_hash
             balance = new_balance
             received += 1
+            self._warm_frontier_work(block_hash.hex())
         return received
 
     def pool_receive_loop(self, interval: int = 30):
@@ -198,6 +199,20 @@ class VelaGuardian:
         resp = self.session.get(self.indexer_url + path, timeout=10)
         resp.raise_for_status()
         return resp.json()
+
+    def _warm_frontier_work(self, root_hex: str):
+        """Ask the indexer work service to precompute send work for a new pool
+        frontier. Every pool block moves the frontier, so warming immediately
+        keeps withdrawal work a cache hit."""
+        try:
+            self.session.post(
+                self.indexer_url + "/api/work/warm",
+                json={"hash": root_hex, "difficulty": "fffffff800000000"},
+                headers={"X-VELA-API-Key": os.environ.get("VELA_API_KEY", "")},
+                timeout=3,
+            )
+        except Exception:
+            pass
 
     def _get_account_info(self, address: str) -> dict:
         return self.rpc.call("account_info", {"account": address, "representative": "true"})
@@ -393,8 +408,13 @@ class VelaGuardian:
 
             # Only mark spent after a successful broadcast.
             self.spent_nullifiers.add(N)
+            broadcast_hash = pending.get("block_hash", "")
             self.pending_withdrawals.pop(N, None)
             self._save_state()
+
+        # The withdrawal block is the pool's new frontier — warm its work.
+        if broadcast_hash:
+            self._warm_frontier_work(broadcast_hash)
 
         return {
             "ok": True,
