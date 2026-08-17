@@ -451,6 +451,10 @@ export default function EasyWallet() {
   function warmWork(hash: string | null | undefined, subtype: "send" | "receive") {
     if (!hash || !/^[0-9a-fA-F]{64}$/.test(hash)) return;
     const difficulty = subtype === "send" ? SEND_THRESHOLD : RECEIVE_THRESHOLD;
+    // Queue the server's work generator too — with enough head start (roots
+    // are known long before their work is needed) the server usually wins the
+    // race and the device never computes at all.
+    void apiPost("/api/work_warm", { hash, difficulty }).catch(() => {});
     void generateLocalWork(hash, difficulty, 300_000);
   }
 
@@ -818,9 +822,9 @@ export default function EasyWallet() {
       if (!currentSourceInfo.frontier) {
         throw new Error("DEPOSIT-FRONTIER: Source account frontier is not available after receiving.");
       }
-      setStatusMessage("Computing proof of work for deposit...");
-      let depositWork = await generateWorkTimed(currentSourceInfo.frontier, "send");
-      setStatusMessage("Broadcasting deposit block...");
+      // Build the block before generating its work: block hashes exclude the
+      // work value, so the commit block's work root (this deposit's hash) can
+      // start warming server-side a full work-cycle earlier.
       const depositBlock = buildSendBlock(source.secretKey, {
         fromAddress: source.address,
         previous: currentSourceInfo.frontier,
@@ -828,21 +832,23 @@ export default function EasyWallet() {
         balance: (bal - denom).toString(),
         link: poolPubHex,
         amount: denom.toString(),
-        work: depositWork,
+        work: "0000000000000000",
       });
+      warmWork(depositBlock.hash, "send");
+
+      setStatusMessage("Computing proof of work for deposit...");
       const depositPrevious = String(depositBlock.block.previous);
+      let depositWork = await generateWorkTimed(depositPrevious, "send");
       if (!validateWork(depositWork, depositPrevious, SEND_THRESHOLD)) {
         log(`WARN: Deposit work invalid; retrying`);
         depositWork = await generateWorkTimed(depositPrevious, "send");
-        (depositBlock.block as Record<string, unknown>).work = depositWork;
         if (!validateWork(depositWork, depositPrevious, SEND_THRESHOLD)) {
           throw new Error("DEPOSIT-WORK: Generated work is invalid for deposit block");
         }
       }
+      (depositBlock.block as Record<string, unknown>).work = depositWork;
       log(`Deposit hash: ${depositBlock.hash}`);
-      // The commit block's work root is the deposit hash — start computing it
-      // in the background so it is ready by the time the broadcast returns.
-      warmWork(depositBlock.hash, "send");
+      setStatusMessage("Broadcasting deposit block...");
       await apiPost("/api/broadcast", { block: depositBlock.block, subtype: "send" });
       log("Deposit broadcasted");
 
