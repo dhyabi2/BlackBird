@@ -8,6 +8,7 @@ import {
   buildSendBlock,
   buildReceiveBlock,
   rawToNano,
+  publicKeyToAddress,
   nanoToRaw,
   validateWork,
   isValidAddress,
@@ -195,6 +196,7 @@ export default function EasyWallet() {
   const [withdrawTx, setWithdrawTx] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [externalAddress, setExternalAddress] = useState("");
+  const [activeAction, setActiveAction] = useState<"deposit" | "withdraw" | "external" | null>(null);
   const [externalAvailable, setExternalAvailable] = useState<bigint | null>(null);
   const [greenlight, setGreenlight] = useState<{ ok: boolean; error?: string } | null>(null);
   const [feeBps, setFeeBps] = useState(0);
@@ -326,6 +328,16 @@ export default function EasyWallet() {
     return recommendDenomination(balance, pendingRaw);
   }, [denomManuallyChanged, busy, depositDone, denomRaw, balance, pendingRaw]);
 
+  // Precompute upcoming proof-of-work in the background while the user reads
+  // the UI: the deposit block's work root is the current frontier, and the
+  // first receive's root is the account public key.
+  useEffect(() => {
+    if (!source || depositDone) return;
+    if (sourceInfo?.frontier) warmWork(sourceInfo.frontier, "send");
+    else warmWork(source.publicKey, "receive");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source?.publicKey, sourceInfo?.frontier, depositDone]);
+
   // Recover shield state after a page reload: if this wallet's commitment is
   // already indexed and its nullifier is unspent, withdrawing is possible
   // right away — the in-memory depositDone/withdrawReady flags don't survive
@@ -368,6 +380,15 @@ export default function EasyWallet() {
 
   function log(msg: string) {
     setLogs((prev) => [...prev, `${new Date().toLocaleTimeString()} ${msg}`]);
+  }
+
+  // Fire-and-forget background work precomputation. nano-pow caches results
+  // per hash, so warming a root early makes the real request near-instant —
+  // the main mobile speedup, since slow devices otherwise stall at each step.
+  function warmWork(hash: string | null | undefined, subtype: "send" | "receive") {
+    if (!hash || !/^[0-9a-fA-F]{64}$/.test(hash)) return;
+    const difficulty = subtype === "send" ? SEND_THRESHOLD : RECEIVE_THRESHOLD;
+    void generateLocalWork(hash, difficulty, 300_000);
   }
 
   // Proof-of-work can take from seconds (GPU) to minutes (WASM). Show a live
@@ -594,6 +615,7 @@ export default function EasyWallet() {
       return;
     }
     setBusy(true);
+    setActiveAction("external");
     setStatusMessage("Sending to external address...");
     try {
       let totalSent = BigInt(0);
@@ -650,12 +672,14 @@ export default function EasyWallet() {
       log(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setBusy(false);
+      setActiveAction(null);
     }
   }
 
   async function handleDeposit() {
     if (!source || !withdraw || !sourceInfo) return;
     setBusy(true);
+    setActiveAction("deposit");
     setStatusMessage("Preparing deposit...");
     setWithdrawReady(false);
     try {
@@ -748,6 +772,9 @@ export default function EasyWallet() {
         }
       }
       log(`Deposit hash: ${depositBlock.hash}`);
+      // The commit block's work root is the deposit hash — start computing it
+      // in the background so it is ready by the time the broadcast returns.
+      warmWork(depositBlock.hash, "send");
       await apiPost("/api/broadcast", { block: depositBlock.block, subtype: "send" });
       log("Deposit broadcasted");
 
@@ -793,6 +820,7 @@ export default function EasyWallet() {
       log(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setBusy(false);
+      setActiveAction(null);
     }
   }
 
@@ -824,7 +852,20 @@ export default function EasyWallet() {
   async function handleWithdraw() {
     if (!source || !withdraw || !epoch) return;
     setBusy(true);
+    setActiveAction("withdraw");
     setStatusMessage("Generating zero-knowledge proof...");
+    // The withdrawal block's work root is the pool frontier — warm it while
+    // the proof generates so the work step is near-instant.
+    void (async () => {
+      try {
+        const poolData = await apiGet(`/api/pool_address/${effectiveDenom}`);
+        const poolAddr = publicKeyToAddress(String(poolData.pool_pubkey));
+        const info = await apiGet(`/api/account_info?account=${encodeURIComponent(poolAddr)}`);
+        warmWork(info.frontier, "send");
+      } catch {
+        // best-effort warm-up only
+      }
+    })();
     try {
       const n = deriveSecretBytes(seed!, withdraw.publicKey, "vela/n");
       const t = deriveSecretBytes(seed!, withdraw.publicKey, "vela/t");
@@ -885,6 +926,7 @@ export default function EasyWallet() {
       log(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setBusy(false);
+      setActiveAction(null);
     }
   }
 
@@ -1023,7 +1065,7 @@ export default function EasyWallet() {
         </select>
       </div>
 
-      {statusMessage && (
+      {statusMessage && !activeAction && (
         <div className="mt-4 rounded-lg border border-black/10 bg-black/5 px-4 py-3 text-sm text-black">
           {busy && <span className="mr-2 inline-block h-3 w-3 animate-spin rounded-full border border-black/30 border-t-black" />}
           {statusMessage}
@@ -1108,6 +1150,12 @@ export default function EasyWallet() {
             <Button onClick={handleDeposit} disabled={busy || !greenlight?.ok || !hasFunds || depositDone} className="mt-4 w-full">
               {busy ? "Working..." : depositDone ? "Shielded" : "Shield now"}
             </Button>
+            {statusMessage && activeAction === "deposit" && (
+              <div className="mt-3 rounded-lg border border-black/10 bg-black/5 px-4 py-3 text-sm text-black">
+                <span className="mr-2 inline-block h-3 w-3 animate-spin rounded-full border border-black/30 border-t-black" />
+                {statusMessage}
+              </div>
+            )}
             {depositTx && (
               <div className="mt-3 flex flex-wrap gap-3 text-xs text-black/70">
                 <a href={explorerLink(depositTx.depositHash)} target="_blank" rel="noreferrer" className="underline">Deposit tx</a>
@@ -1137,6 +1185,12 @@ export default function EasyWallet() {
             <Button onClick={handleWithdraw} disabled={busy || !withdrawReady} variant="secondary" className="mt-4 w-full">
               {busy ? "Working..." : "Withdraw now"}
             </Button>
+            {statusMessage && activeAction === "withdraw" && (
+              <div className="mt-3 rounded-lg border border-black/10 bg-black/5 px-4 py-3 text-sm text-black">
+                <span className="mr-2 inline-block h-3 w-3 animate-spin rounded-full border border-black/30 border-t-black" />
+                {statusMessage}
+              </div>
+            )}
             {withdrawTx && (
               <div className="mt-3 text-xs text-black/70">
                 <a href={explorerLink(withdrawTx)} target="_blank" rel="noreferrer" className="underline">Withdrawal tx</a>
@@ -1184,6 +1238,12 @@ export default function EasyWallet() {
         >
           {busy ? "Working..." : "Send all to this address"}
         </Button>
+        {statusMessage && activeAction === "external" && (
+          <div className="mt-3 rounded-lg border border-black/10 bg-black/5 px-4 py-3 text-sm text-black">
+            <span className="mr-2 inline-block h-3 w-3 animate-spin rounded-full border border-black/30 border-t-black" />
+            {statusMessage}
+          </div>
+        )}
       </div>
 
       {phrase && (
