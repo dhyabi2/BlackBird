@@ -5,8 +5,10 @@ import { validateWork } from "./work";
 let nanoPowModule: Promise<typeof import("nano-pow")> | null = null;
 
 // WASM-only machines can take minutes at send difficulty; give up after this
-// long and let the caller fall back to the remote work API.
-const LOCAL_WORK_TIMEOUT_MS = 45000;
+// long and let the caller fall back to the remote work API. nano-pow keeps
+// computing after we stop waiting and caches the result per hash, so a retry
+// with a longer timeout often returns instantly.
+const DEFAULT_LOCAL_WORK_TIMEOUT_MS = 45000;
 
 function reverseHex(hex: string): string {
   return hex.match(/.{2}/g)!.reverse().join("");
@@ -20,7 +22,8 @@ function reverseHex(hex: string): string {
  */
 export async function generateLocalWork(
   hash: string,
-  threshold: string
+  threshold: string,
+  timeoutMs: number = DEFAULT_LOCAL_WORK_TIMEOUT_MS
 ): Promise<string | null> {
   if (typeof window === "undefined") return null;
   if (!/^[0-9a-fA-F]{64}$/.test(hash)) return null;
@@ -31,7 +34,7 @@ export async function generateLocalWork(
     const { NanoPow } = await nanoPowModule;
 
     const timeout = new Promise<null>((resolve) =>
-      setTimeout(() => resolve(null), LOCAL_WORK_TIMEOUT_MS)
+      setTimeout(() => resolve(null), timeoutMs)
     );
     const result = await Promise.race([
       NanoPow.work_generate(hash, {

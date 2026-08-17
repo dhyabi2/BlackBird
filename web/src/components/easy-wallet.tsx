@@ -42,17 +42,24 @@ async function generateWork(hash: string, subtype: "send" | "receive"): Promise<
   }
   const difficulty = subtype === "send" ? SEND_THRESHOLD : RECEIVE_THRESHOLD;
 
-  // Primary path: generate work in the browser (WebGPU/WebGL2/WASM). This
-  // avoids depending on remote work services that may return invalid work.
-  const local = await generateLocalWork(hash, difficulty);
-  if (local) return local;
-
-  // Fallback: server-side work API (rpc.nano.to), validated server-side.
-  const res = await apiPost("/api/work", { hash, difficulty });
-  if (!res.work || !/^[0-9a-fA-F]{16}$/.test(res.work)) {
-    throw new Error("Work generator returned an invalid work value");
+  // Primary path: generate work in the browser (WebGPU/WebGL2/WASM). PoW time
+  // is probabilistic, so retry locally with escalating timeouts — nano-pow
+  // keeps computing after a timeout and caches per hash, making retries cheap.
+  // The remote /api/work is tried between attempts but its upstream is
+  // unreliable, so a remote failure never aborts the loop.
+  const timeouts = [45_000, 90_000, 180_000];
+  let lastError: Error | null = null;
+  for (const timeoutMs of timeouts) {
+    const local = await generateLocalWork(hash, difficulty, timeoutMs);
+    if (local) return local;
+    try {
+      const res = await apiPost("/api/work", { hash, difficulty });
+      if (res.work && /^[0-9a-fA-F]{16}$/.test(res.work)) return res.work;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
   }
-  return res.work;
+  throw lastError ?? new Error("Work generation failed after multiple attempts");
 }
 
 const DENOMINATIONS = [
@@ -1090,6 +1097,15 @@ export default function EasyWallet() {
           </div>
         </div>
 
+        {logs.length > 0 && (
+          <div className="rounded-xl border border-black/10 bg-black/5 p-5">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-black/70">Activity log</h2>
+            <pre className="max-h-64 overflow-auto font-mono text-xs text-black/70">
+              {[...logs].reverse().join("\n")}
+            </pre>
+          </div>
+        )}
+
         <div className={stepClasses(3)}>
           <div className={stepNumClasses(3)}>3</div>
           <div className="flex-1">
@@ -1158,14 +1174,6 @@ export default function EasyWallet() {
         </div>
       )}
 
-      {logs.length > 0 && (
-        <div className="mt-8 rounded-xl border border-black/10 bg-black/5 p-5">
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-black/70">Activity log</h2>
-          <pre className="max-h-64 overflow-auto font-mono text-xs text-black/70">
-            {logs.join("\n")}
-          </pre>
-        </div>
-      )}
     </div>
   );
 }
