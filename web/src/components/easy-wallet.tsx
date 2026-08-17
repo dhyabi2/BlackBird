@@ -86,6 +86,24 @@ const DENOMINATIONS = [
   { raw: ALLOWED_DENOMINATIONS[3], label: "100 XNO" },
 ];
 
+// Shield secrets are scoped per denomination so each (wallet, withdraw key,
+// denomination) triple gets its own nullifier. The original scheme omitted the
+// denomination, which let a withdrawal in one denomination burn the nullifier
+// of a still-deposited shield in another — permanently locking those funds.
+// `legacy` recomputes the old scheme for recovering pre-existing shields.
+function shieldSecrets(
+  seedHex: string,
+  P_w_hex: string,
+  denomRaw: string,
+  legacy = false
+): { n: Uint8Array; t: Uint8Array } {
+  const suffix = legacy ? "" : `/${denomRaw}`;
+  return {
+    n: deriveSecretBytes(seedHex, P_w_hex, `vela/n${suffix}`),
+    t: deriveSecretBytes(seedHex, P_w_hex, `vela/t${suffix}`),
+  };
+}
+
 function deriveSecretBytes(seedHex: string, P_w_hex: string, salt: string): Uint8Array {
   const seedBytes = hexToBytes(seedHex);
   const PwBytes = hexToBytes(P_w_hex);
@@ -381,27 +399,38 @@ export default function EasyWallet() {
     let alive = true;
     (async () => {
       try {
-        const poolData = await apiGet(`/api/pool_address/${effectiveDenom}`);
-        const S_pub = hexToBytes(poolData.pool_pubkey as string);
         const P_w = hexToBytes(withdraw.publicKey);
-        const n = deriveSecretBytes(seed, withdraw.publicKey, "vela/n");
-        const t = deriveSecretBytes(seed, withdraw.publicKey, "vela/t");
-        const C_hex = computeCommitment(n, t, P_w, S_pub).toString(16).padStart(64, "0");
-        const status = (await apiGet(`/api/deposit_status?commitment=${C_hex}`)) as {
-          indexed?: boolean;
-          epoch?: number;
-        };
-        if (!alive || !status.indexed) return;
-        const nullifier = computeNullifier(n);
-        const nullStatus = await apiGet(
-          `/api/nullifier_status?nullifier=${nullifier.toString(16)}`
-        ).catch(() => null);
-        if (!alive || nullStatus?.spent) return;
-        if (typeof status.epoch === "number") setEpoch(status.epoch);
-        setDepositDone(true);
-        setWithdrawReady(true);
-        setStatusMessage("Existing shield found. You can send privately now.");
-        log("Recovered existing shield from indexer.");
+        // A shield could exist in any denomination and under either secret
+        // derivation scheme — scan them all instead of only the current pick.
+        for (const denom of ALLOWED_DENOMINATIONS) {
+          const poolData = await apiGet(`/api/pool_address/${denom}`).catch(() => null);
+          if (!alive) return;
+          if (!poolData) continue;
+          const S_pub = hexToBytes(poolData.pool_pubkey as string);
+          for (const legacy of [false, true]) {
+            const { n, t } = shieldSecrets(seed, withdraw.publicKey, String(denom), legacy);
+            const C_hex = computeCommitment(n, t, P_w, S_pub).toString(16).padStart(64, "0");
+            const status = (await apiGet(`/api/deposit_status?commitment=${C_hex}`).catch(() => null)) as {
+              indexed?: boolean;
+              epoch?: number;
+            } | null;
+            if (!alive) return;
+            if (!status?.indexed) continue;
+            const nullStatus = await apiGet(
+              `/api/nullifier_status?nullifier=${computeNullifier(n).toString(16)}`
+            ).catch(() => null);
+            if (!alive) return;
+            if (nullStatus?.spent) continue;
+            if (typeof status.epoch === "number") setEpoch(status.epoch);
+            setDenomRaw(String(denom));
+            setDenomManuallyChanged(true);
+            setDepositDone(true);
+            setWithdrawReady(true);
+            setStatusMessage(`Existing ${nano(BigInt(denom))} XNO shield found. You can send privately now.`);
+            log(`Recovered existing ${nano(BigInt(denom))} XNO shield from indexer${legacy ? " (legacy derivation)" : ""}.`);
+            return;
+          }
+        }
       } catch {
         // Recovery is best-effort; the normal deposit flow still works.
       }
@@ -751,21 +780,21 @@ export default function EasyWallet() {
       // withdraw account instead of dead-ending on a spent one.
       let wIdx = withdrawIndex;
       let withdrawAcct = deriveLegacyAccount(seed!, wIdx);
-      let n = deriveSecretBytes(seed!, withdrawAcct.publicKey, "vela/n");
+      let secrets = shieldSecrets(seed!, withdrawAcct.publicKey, String(effectiveDenom));
       for (let tries = 0; tries < 20; tries++) {
         const nullStatus = await apiGet(
-          `/api/nullifier_status?nullifier=${computeNullifier(n).toString(16)}`
+          `/api/nullifier_status?nullifier=${computeNullifier(secrets.n).toString(16)}`
         ).catch(() => null);
         if (!nullStatus?.spent) break;
         log(`Withdraw account ${wIdx} already used; advancing to ${wIdx + 1}.`);
         wIdx++;
         withdrawAcct = deriveLegacyAccount(seed!, wIdx);
-        n = deriveSecretBytes(seed!, withdrawAcct.publicKey, "vela/n");
+        secrets = shieldSecrets(seed!, withdrawAcct.publicKey, String(effectiveDenom));
       }
       if (wIdx !== withdrawIndex) setWithdrawIndex(wIdx);
 
       const P_w = hexToBytes(withdrawAcct.publicKey);
-      const t = deriveSecretBytes(seed!, withdrawAcct.publicKey, "vela/t");
+      const { n, t } = secrets;
       const C = computeCommitment(n, t, P_w, S_pub);
       const C_hex = C.toString(16).padStart(64, "0");
       log(`Commitment: ${C_hex.slice(0, 16)}...`);
@@ -906,8 +935,36 @@ export default function EasyWallet() {
       }
     })();
     try {
-      const n = deriveSecretBytes(seed!, withdraw.publicKey, "vela/n");
-      const t = deriveSecretBytes(seed!, withdraw.publicKey, "vela/t");
+      // Resolve which derivation scheme this shield used: try the current
+      // denomination-scoped scheme first, then the legacy scheme for shields
+      // created before the fix. The indexed commitment tells us which one.
+      const poolInfo = await apiGet(`/api/pool_address/${effectiveDenom}`);
+      const S_pubW = hexToBytes(poolInfo.pool_pubkey as string);
+      const P_wBytes = hexToBytes(withdraw.publicKey);
+      let { n, t } = shieldSecrets(seed!, withdraw.publicKey, String(effectiveDenom));
+      let withdrawEpoch = epoch;
+      let resolved = false;
+      for (const legacy of [false, true]) {
+        const candidate = legacy
+          ? shieldSecrets(seed!, withdraw.publicKey, String(effectiveDenom), true)
+          : { n, t };
+        const cHex = computeCommitment(candidate.n, candidate.t, P_wBytes, S_pubW)
+          .toString(16)
+          .padStart(64, "0");
+        const status = (await apiGet(`/api/deposit_status?commitment=${cHex}`).catch(() => null)) as {
+          indexed?: boolean;
+          epoch?: number;
+        } | null;
+        if (status?.indexed) {
+          n = candidate.n;
+          t = candidate.t;
+          if (typeof status.epoch === "number") withdrawEpoch = status.epoch;
+          resolved = true;
+          if (legacy) log("Using legacy shield derivation for this withdrawal.");
+          break;
+        }
+      }
+      if (!resolved) throw new Error("WITHDRAW-RESOLVE: No indexed shield found for this withdraw account");
       const nullifier = computeNullifier(n);
       log(`Withdrawing to: ${withdraw.address}`);
 
@@ -917,7 +974,7 @@ export default function EasyWallet() {
         P_w: withdraw.publicKey,
         nullifier: nullifier.toString(16),
         denomination: String(effectiveDenom),
-        epoch,
+        epoch: withdrawEpoch,
       });
       if (!proofRes.proof || !proofRes.publicSignals) throw new Error("WITHDRAW-PROOF: Proof response missing proof or publicSignals");
       log("Proof generated");
@@ -931,7 +988,7 @@ export default function EasyWallet() {
       for (let attempt = 1; attempt <= 3; attempt++) {
         const withdrawRes = await apiPost("/api/withdraw", {
           destination: withdraw.address,
-          epoch,
+          epoch: withdrawEpoch,
           denomination: String(effectiveDenom),
           nullifier: nullifier.toString(16),
           proof: proofRes.proof,

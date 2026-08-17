@@ -407,8 +407,10 @@ async function runVelaCycleForWallet(sourceWallet, withdrawWallet, resume = fals
   const poolPubkeyHex = poolInfo.pool_pubkey;
   const S_pub = hexToBytes(poolPubkeyHex);
   const P_w = hexToBytes(withdrawWallet.publicKey);
-  const n = deriveSecretBytes(sourceWallet.seed, withdrawWallet.publicKey, "vela/n");
-  const t = deriveSecretBytes(sourceWallet.seed, withdrawWallet.publicKey, "vela/t");
+  // Denomination-scoped derivation (matches easy-wallet): keeps nullifiers
+  // independent across denominations.
+  const n = deriveSecretBytes(sourceWallet.seed, withdrawWallet.publicKey, `vela/n/${denomRaw}`);
+  const t = deriveSecretBytes(sourceWallet.seed, withdrawWallet.publicKey, `vela/t/${denomRaw}`);
   const C = computeCommitment(n, t, P_w, S_pub);
   const C_hex = C.toString(16).padStart(64, "0");
   const nullifier = computeNullifier(n);
