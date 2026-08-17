@@ -390,6 +390,45 @@ export default function EasyWallet() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source?.publicKey, sourceInfo?.frontier, depositDone]);
 
+  // Detect a half-completed shield after reload: the frontier is a deposit to
+  // one of the pools but the commitment never went out. Select that
+  // denomination and enable "Shield now" so the flow can resume.
+  const [resumeReady, setResumeReady] = useState(false);
+  useEffect(() => {
+    if (!source || !sourceInfo?.frontier || depositDone || busy) return;
+    let alive = true;
+    (async () => {
+      try {
+        const blocks = (await apiPost("/api/blocks_info", { hashes: [sourceInfo.frontier] }).catch(() => null)) as
+          | Record<string, { amount?: string; contents?: { link?: string } }>
+          | null;
+        const fb = blocks?.[sourceInfo.frontier!];
+        if (!alive || !fb?.contents?.link) return;
+        for (const denom of ALLOWED_DENOMINATIONS) {
+          if (fb.amount !== denom) continue;
+          const poolData = await apiGet(`/api/pool_address/${denom}`).catch(() => null);
+          if (!alive || !poolData) return;
+          if (String(poolData.pool_pubkey).toLowerCase() === fb.contents.link.toLowerCase()) {
+            setDenomRaw(String(denom));
+            setDenomManuallyChanged(true);
+            setResumeReady(true);
+            setStatusMessage(
+              `Found an unfinished ${nano(BigInt(denom))} XNO shield — press "Shield now" to complete it.`
+            );
+            log(`Unfinished ${nano(BigInt(denom))} XNO shield detected (deposit without commitment).`);
+            return;
+          }
+        }
+      } catch {
+        // best-effort detection
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source?.address, sourceInfo?.frontier, depositDone, busy]);
+
   // Recover shield state after a page reload: if this wallet's commitment is
   // already indexed and its nullifier is unspent, withdrawing is possible
   // right away — the in-memory depositDone/withdrawReady flags don't survive
@@ -1297,7 +1336,7 @@ export default function EasyWallet() {
             {hasPending && !depositDone && (
               <p className="mt-2 text-sm text-black/70">Funding detected — you can shield now.</p>
             )}
-            <Button onClick={handleDeposit} disabled={busy || !greenlight?.ok || !hasFunds || depositDone} className="mt-4 w-full">
+            <Button onClick={handleDeposit} disabled={busy || !greenlight?.ok || (!hasFunds && !resumeReady) || depositDone} className="mt-4 w-full">
               {busy ? "Working..." : depositDone ? "Shielded" : "Shield now"}
             </Button>
             {statusMessage && activeAction === "deposit" && (
