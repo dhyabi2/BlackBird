@@ -32,6 +32,9 @@ $SSH root@$VPS_HOST 'cd /opt/vela && python3 -m venv venv && venv/bin/pip instal
 # Install npm deps on the VPS (for snarkjs helpers)
 $SSH root@$VPS_HOST 'cd /opt/vela && npm install'
 
+# Compile the proof-of-work generator used by the indexer work service
+$SSH root@$VPS_HOST 'mkdir -p /opt/vela/bin && (gcc -O3 -march=native -o /opt/vela/bin/workgen /opt/vela/src/workgen.c 2>/dev/null || gcc -O3 -o /opt/vela/bin/workgen /opt/vela/src/workgen.c)'
+
 # Rotate guardian seed if requested. Existing deposits to the old pool addresses will be
 # unreachable, so only do this when the pools are empty.
 if [ "${ROTATE_GUARDIAN_SEED:-0}" = "1" ]; then

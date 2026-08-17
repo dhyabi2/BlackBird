@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { nanoRpcCall } from "@/lib/nano-rpc";
+import { warmServerWork } from "@/lib/server-work";
 import { ApiError } from "@/lib/errors";
 import { withApiHandler, optionsHandler } from "@/lib/api";
 import { checkRateLimit } from "@/lib/rate-limit";
@@ -49,10 +50,18 @@ export async function POST(request: NextRequest) {
       throw new ApiError(429, "Rate limit exceeded");
     }
 
-    return nanoRpcCall("process", {
+    const result = (await nanoRpcCall("process", {
       json_block: "true",
       subtype: parsed.data.subtype,
       block: parsed.data.block,
-    });
+    })) as { hash?: string };
+
+    // The hash of the block just broadcast is this account's next work root —
+    // queue server-side precomputation so the next step gets a cache hit.
+    if (result?.hash) {
+      void warmServerWork(result.hash);
+    }
+
+    return result;
   });
 }

@@ -43,11 +43,19 @@ async function generateWork(hash: string, subtype: "send" | "receive"): Promise<
   }
   const difficulty = subtype === "send" ? SEND_THRESHOLD : RECEIVE_THRESHOLD;
 
-  // Primary path: generate work in the browser (WebGPU/WebGL2/WASM). PoW time
-  // is probabilistic, so retry locally with escalating timeouts — nano-pow
+  // Server-first: the backend keeps a pre-warmed work cache (pool frontiers,
+  // post-broadcast roots) and computes receive-difficulty work on demand, so
+  // most requests return instantly without any device computation.
+  try {
+    const res = await apiPost("/api/work", { hash, difficulty });
+    if (res.work && /^[0-9a-fA-F]{16}$/.test(res.work)) return res.work;
+  } catch {
+    // Server has no work ready (it queued it) — generate on device.
+  }
+
+  // Device fallback (WebGPU/WebGL2/WASM in a worker). PoW time is
+  // probabilistic, so retry locally with escalating timeouts — nano-pow
   // keeps computing after a timeout and caches per hash, making retries cheap.
-  // The remote /api/work is tried between attempts but its upstream is
-  // unreliable, so a remote failure never aborts the loop.
   const timeouts = [45_000, 90_000, 180_000];
   let lastError: Error | null = null;
   for (const timeoutMs of timeouts) {

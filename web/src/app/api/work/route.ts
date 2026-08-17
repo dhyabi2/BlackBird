@@ -5,6 +5,7 @@ import { withApiHandler, optionsHandler } from "@/lib/api";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getClientIp } from "@/lib/ip";
 import { validateWork } from "@/lib/work";
+import { getServerWork } from "@/lib/server-work";
 import { z } from "zod";
 
 export const maxDuration = 60;
@@ -27,23 +28,28 @@ export async function POST(request: NextRequest) {
 
     const threshold = parsed.data.difficulty ?? "fffffe0000000000";
 
+    // 1. Backend work service: pre-warmed cache (pool frontiers, post-broadcast
+    //    roots) or on-demand CPU compute for receive difficulty.
+    const serverWork = await getServerWork(parsed.data.hash, threshold);
+    if (serverWork && validateWork(serverWork, parsed.data.hash, threshold)) {
+      return { work: serverWork, source: "server" };
+    }
+
+    // 2. rpc.nano.to, validated locally (its work service has a history of
+    //    returning invalid nonces).
     const rpcResult = (await nanoRpcCall("work_generate", {
       hash: parsed.data.hash,
       difficulty: threshold,
-    })) as { work?: string };
+    }).catch(() => ({}))) as { work?: string };
 
-    if (!rpcResult.work) {
-      throw new ApiError(502, "Work generation failed");
+    if (rpcResult.work && validateWork(rpcResult.work, parsed.data.hash, threshold)) {
+      return { work: rpcResult.work, source: "rpc" };
     }
 
-    if (!validateWork(rpcResult.work, parsed.data.hash, threshold)) {
-      throw new ApiError(
-        502,
-        "Remote work service returned invalid proof-of-work."
-      );
-    }
-
-    return { work: rpcResult.work };
+    throw new ApiError(
+      502,
+      "No valid proof-of-work available yet; it is being computed in the background."
+    );
   });
 }
 

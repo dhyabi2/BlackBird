@@ -20,7 +20,8 @@ from typing import Dict, List, Optional, Tuple
 import requests
 from flask import Flask, request, jsonify
 
-from .vela_crypto import pool_pubkey, nano_pubkey_from_address, compute_commitment, compute_nullifier
+from .vela_crypto import pool_pubkey, pool_address, nano_pubkey_from_address, compute_commitment, compute_nullifier
+from .work_service import WorkService, SEND_DIFFICULTY, RECEIVE_DIFFICULTY
 from .poseidon_bridge import poseidon_tree, split32
 from .snarkjs_bridge import generate_proof
 from .nano_rpc import NanoRPC
@@ -230,8 +231,64 @@ def require_api_key(f):
     return decorated
 
 
+def pool_frontier_keeper(indexer: VelaIndexer, work_service: WorkService, interval: int = 15):
+    """Keep send-difficulty work for every pool frontier permanently warmed.
+
+    Pool frontiers are the only work roots known continuously in advance, so
+    withdrawal work can always be served instantly from the cache.
+    """
+    while True:
+        for denom in sorted(DENOMINATIONS):
+            try:
+                addr = pool_address(denom)
+                info = indexer.rpc.call("account_info", {"account": addr})
+                frontier = info.get("frontier")
+                if frontier:
+                    work_service.warm(frontier, SEND_DIFFICULTY)
+            except Exception as e:
+                print("pool frontier keeper error:", e)
+        time.sleep(interval)
+
+
 def create_app(indexer: VelaIndexer) -> Flask:
     app = Flask(__name__)
+    work_service = WorkService()
+    threading.Thread(
+        target=pool_frontier_keeper, args=(indexer, work_service), daemon=True
+    ).start()
+
+    HEX64 = "0123456789abcdefABCDEF"
+
+    def _valid_hex(s, length):
+        return isinstance(s, str) and len(s) == length and all(c in HEX64 for c in s)
+
+    @app.route("/api/work", methods=["POST"])
+    @require_api_key
+    def api_work():
+        data = request.json or {}
+        root = data.get("hash", "")
+        difficulty = data.get("difficulty", SEND_DIFFICULTY)
+        if not _valid_hex(root, 64) or not _valid_hex(difficulty, 16):
+            return jsonify({"error": "invalid hash/difficulty"}), 400
+        # Receive-difficulty work averages ~1.5s on this CPU, so compute it on
+        # demand; send-difficulty averages ~95s, so serve it from cache only
+        # (with a short grace period) and let the client fall back to local PoW.
+        wait = 20.0 if difficulty.lower() == RECEIVE_DIFFICULTY else 3.0
+        work = work_service.get_or_wait(root, difficulty, wait)
+        if work:
+            return jsonify({"work": work, "source": "server-cache"})
+        return jsonify({"error": "work not ready", "queued": True}), 404
+
+    @app.route("/api/work/warm", methods=["POST"])
+    @require_api_key
+    def api_work_warm():
+        data = request.json or {}
+        root = data.get("hash", "")
+        difficulty = data.get("difficulty", SEND_DIFFICULTY)
+        if not _valid_hex(root, 64) or not _valid_hex(difficulty, 16):
+            return jsonify({"error": "invalid hash/difficulty"}), 400
+        queued = work_service.warm(root, difficulty)
+        return jsonify({"ok": True, "queued": queued, **work_service.stats()})
 
     @app.route("/")
     def health():
