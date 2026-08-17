@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC" xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI" id="BlackBird_private_send_simple" targetNamespace="http://blackbird.protocol" exporter="BlackBird" exporterVersion="1.0">
+  <collaboration id="Collab_PrivateSend">
+    <participant id="Pool_Sender" name="Sender (Human)" processRef="Proc_Sender"/>
+    <participant id="Pool_Protocol" name="BlackBird Privacy Pool" processRef="Proc_Protocol"/>
+    <participant id="Pool_Receiver" name="Receiver (Human)" processRef="Proc_Receiver"/>
+    <messageFlow id="MF_Shield" name="0.1 XNO deposit + secret note" sourceRef="T_Shield" targetRef="S_PoolDeposit"/>
+    <messageFlow id="MF_Proof" name="zero-knowledge proof (no identity)" sourceRef="T_Withdraw" targetRef="T_VerifyProof"/>
+    <messageFlow id="MF_Payout" name="0.1 XNO to fresh address" sourceRef="T_Payout" targetRef="T_ReceiveFresh"/>
+    <messageFlow id="MF_Deliver" name="normal XNO send (from unlinkable account)" sourceRef="T_SendReceiver" targetRef="S_Receiver"/>
+  </collaboration>
+  <process id="Proc_Sender" isExecutable="false">
+    <startEvent id="S_Sender" name="Wants to send XNO privately"/>
+    <task id="T_Fund" name="Fund shield address with XNO (e.g. 0.1)"/>
+    <task id="T_Shield" name="Click SHIELD — coins enter the privacy pool"/>
+    <task id="T_Mix" name="Coin sits in the pool with everyone else's — outside observers cannot tell which coin is whose"/>
+    <task id="T_Withdraw" name="Click WITHDRAW — wallet proves &quot;one of these coins is mine&quot; WITHOUT revealing which"/>
+    <task id="T_ReceiveFresh" name="Receive XNO into a brand-new account with no history"/>
+    <task id="T_SendReceiver" name="Send to receiver (or exchange) from the fresh account"/>
+    <endEvent id="E_Sender" name="Sent — trail broken"/>
+    <sequenceFlow id="F1" sourceRef="S_Sender" targetRef="T_Fund"/>
+    <sequenceFlow id="F2" sourceRef="T_Fund" targetRef="T_Shield"/>
+    <sequenceFlow id="F3" sourceRef="T_Shield" targetRef="T_Mix"/>
+    <sequenceFlow id="F4" sourceRef="T_Mix" targetRef="T_Withdraw"/>
+    <sequenceFlow id="F5" sourceRef="T_Withdraw" targetRef="T_ReceiveFresh"/>
+    <sequenceFlow id="F6" sourceRef="T_ReceiveFresh" targetRef="T_SendReceiver"/>
+    <sequenceFlow id="F7" sourceRef="T_SendReceiver" targetRef="E_Sender"/>
+  </process>
+  <process id="Proc_Protocol" isExecutable="false">
+    <startEvent id="S_PoolDeposit" name="Deposit arrives at the pool"/>
+    <task id="T_Note" name="Record the secret note (commitment) in the anonymity set — like dropping a locked box into a shared vault"/>
+    <task id="T_VerifyProof" name="Check the zero-knowledge proof: real deposit? not spent before? (learns nothing about WHO)"/>
+    <exclusiveGateway id="G_Valid" name="Proof valid &amp; not double-spent?"/>
+    <task id="T_Payout" name="Pool pays out to the fresh address — on-chain there is NO link to the original deposit"/>
+    <endEvent id="E_PoolPaid" name="Paid out"/>
+    <endEvent id="E_PoolReject" name="Rejected (invalid or already spent)"/>
+    <sequenceFlow id="P1" sourceRef="S_PoolDeposit" targetRef="T_Note"/>
+    <sequenceFlow id="P2" sourceRef="T_Note" targetRef="T_VerifyProof"/>
+    <sequenceFlow id="P3" sourceRef="T_VerifyProof" targetRef="G_Valid"/>
+    <sequenceFlow id="P4_Yes" name="Yes" sourceRef="G_Valid" targetRef="T_Payout"/>
+    <sequenceFlow id="P4_No" name="No" sourceRef="G_Valid" targetRef="E_PoolReject"/>
+    <sequenceFlow id="P5" sourceRef="T_Payout" targetRef="E_PoolPaid"/>
+  </process>
+  <process id="Proc_Receiver" isExecutable="false">
+    <startEvent id="S_Receiver" name="XNO arrives"/>
+    <task id="T_Anon" name="Sees a payment from an unknown fresh account — cannot trace it back to the sender's wallet or history"/>
+    <endEvent id="E_Receiver" name="Received privately"/>
+    <sequenceFlow id="R1" sourceRef="S_Receiver" targetRef="T_Anon"/>
+    <sequenceFlow id="R2" sourceRef="T_Anon" targetRef="E_Receiver"/>
+  </process>
+  <bpmndi:BPMNDiagram id="Diagram_PrivateSend" name="Private XNO Send — Simple Cycle">
+    <bpmndi:BPMNPlane id="Plane_PrivateSend" bpmnElement="Collab_PrivateSend">
+      <bpmndi:BPMNShape id="Pool_Sender_di" bpmnElement="Pool_Sender" isHorizontal="true">
+        <omgdc:Bounds x="80" y="80" width="1560" height="200"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Pool_Protocol_di" bpmnElement="Pool_Protocol" isHorizontal="true">
+        <omgdc:Bounds x="80" y="320" width="1560" height="200"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Pool_Receiver_di" bpmnElement="Pool_Receiver" isHorizontal="true">
+        <omgdc:Bounds x="80" y="560" width="1560" height="160"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Sender_di" bpmnElement="S_Sender">
+        <omgdc:Bounds x="140" y="152" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="T_Fund_di" bpmnElement="T_Fund">
+        <omgdc:Bounds x="220" y="130" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="T_Shield_di" bpmnElement="T_Shield">
+        <omgdc:Bounds x="400" y="130" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="T_Mix_di" bpmnElement="T_Mix">
+        <omgdc:Bounds x="580" y="130" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="T_Withdraw_di" bpmnElement="T_Withdraw">
+        <omgdc:Bounds x="780" y="130" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="T_ReceiveFresh_di" bpmnElement="T_ReceiveFresh">
+        <omgdc:Bounds x="1000" y="130" width="150" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="T_SendReceiver_di" bpmnElement="T_SendReceiver">
+        <omgdc:Bounds x="1200" y="130" width="150" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="E_Sender_di" bpmnElement="E_Sender">
+        <omgdc:Bounds x="1420" y="152" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_PoolDeposit_di" bpmnElement="S_PoolDeposit">
+        <omgdc:Bounds x="452" y="392" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="T_Note_di" bpmnElement="T_Note">
+        <omgdc:Bounds x="540" y="370" width="170" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="T_VerifyProof_di" bpmnElement="T_VerifyProof">
+        <omgdc:Bounds x="780" y="370" width="170" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="G_Valid_di" bpmnElement="G_Valid">
+        <omgdc:Bounds x="990" y="385" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="T_Payout_di" bpmnElement="T_Payout">
+        <omgdc:Bounds x="1080" y="370" width="170" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="E_PoolPaid_di" bpmnElement="E_PoolPaid">
+        <omgdc:Bounds x="1300" y="392" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="E_PoolReject_di" bpmnElement="E_PoolReject">
+        <omgdc:Bounds x="997" y="470" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Receiver_di" bpmnElement="S_Receiver">
+        <omgdc:Bounds x="1282" y="612" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="T_Anon_di" bpmnElement="T_Anon">
+        <omgdc:Bounds x="1360" y="590" width="170" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="E_Receiver_di" bpmnElement="E_Receiver">
+        <omgdc:Bounds x="1570" y="612" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="F1_di" bpmnElement="F1">
+        <omgdi:waypoint x="176" y="170"/>
+        <omgdi:waypoint x="220" y="170"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="F2_di" bpmnElement="F2">
+        <omgdi:waypoint x="360" y="170"/>
+        <omgdi:waypoint x="400" y="170"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="F3_di" bpmnElement="F3">
+        <omgdi:waypoint x="540" y="170"/>
+        <omgdi:waypoint x="580" y="170"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="F4_di" bpmnElement="F4">
+        <omgdi:waypoint x="740" y="170"/>
+        <omgdi:waypoint x="780" y="170"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="F5_di" bpmnElement="F5">
+        <omgdi:waypoint x="940" y="170"/>
+        <omgdi:waypoint x="1000" y="170"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="F6_di" bpmnElement="F6">
+        <omgdi:waypoint x="1150" y="170"/>
+        <omgdi:waypoint x="1200" y="170"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="F7_di" bpmnElement="F7">
+        <omgdi:waypoint x="1350" y="170"/>
+        <omgdi:waypoint x="1420" y="170"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="P1_di" bpmnElement="P1">
+        <omgdi:waypoint x="488" y="410"/>
+        <omgdi:waypoint x="540" y="410"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="P2_di" bpmnElement="P2">
+        <omgdi:waypoint x="710" y="410"/>
+        <omgdi:waypoint x="780" y="410"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="P3_di" bpmnElement="P3">
+        <omgdi:waypoint x="950" y="410"/>
+        <omgdi:waypoint x="990" y="410"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="P4_Yes_di" bpmnElement="P4_Yes">
+        <omgdi:waypoint x="1040" y="410"/>
+        <omgdi:waypoint x="1080" y="410"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="P4_No_di" bpmnElement="P4_No">
+        <omgdi:waypoint x="1015" y="435"/>
+        <omgdi:waypoint x="1015" y="470"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="P5_di" bpmnElement="P5">
+        <omgdi:waypoint x="1250" y="410"/>
+        <omgdi:waypoint x="1300" y="410"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="R1_di" bpmnElement="R1">
+        <omgdi:waypoint x="1318" y="630"/>
+        <omgdi:waypoint x="1360" y="630"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="R2_di" bpmnElement="R2">
+        <omgdi:waypoint x="1530" y="630"/>
+        <omgdi:waypoint x="1570" y="630"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_Shield_di" bpmnElement="MF_Shield">
+        <omgdi:waypoint x="470" y="210"/>
+        <omgdi:waypoint x="470" y="392"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_Proof_di" bpmnElement="MF_Proof">
+        <omgdi:waypoint x="860" y="210"/>
+        <omgdi:waypoint x="865" y="370"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_Payout_di" bpmnElement="MF_Payout">
+        <omgdi:waypoint x="1165" y="370"/>
+        <omgdi:waypoint x="1075" y="210"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="MF_Deliver_di" bpmnElement="MF_Deliver">
+        <omgdi:waypoint x="1275" y="210"/>
+        <omgdi:waypoint x="1300" y="612"/>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>
