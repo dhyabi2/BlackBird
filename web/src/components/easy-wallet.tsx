@@ -900,37 +900,54 @@ export default function EasyWallet() {
       log("Proof generated");
 
       setStatusMessage("Requesting guardian signature...");
-      const withdrawRes = await apiPost("/api/withdraw", {
-        destination: withdraw.address,
-        epoch,
-        denomination: String(effectiveDenom),
-        nullifier: nullifier.toString(16),
-        proof: proofRes.proof,
-        publicSignals: proofRes.publicSignals,
-      });
-      if (!withdrawRes.block || !withdrawRes.block_hash) throw new Error("WITHDRAW-SIGN: Guardian did not return a block");
+      // The pool frontier can move between signing and broadcast (the guardian
+      // sweeps incoming deposits). On a Fork rejection, re-request the
+      // withdrawal — the guardian re-signs against the current frontier.
+      let broadcastRes: { broadcast_result?: { hash?: string }; ok?: boolean } | null = null;
+      let lastBlockHash = "";
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const withdrawRes = await apiPost("/api/withdraw", {
+          destination: withdraw.address,
+          epoch,
+          denomination: String(effectiveDenom),
+          nullifier: nullifier.toString(16),
+          proof: proofRes.proof,
+          publicSignals: proofRes.publicSignals,
+        });
+        if (!withdrawRes.block || !withdrawRes.block_hash) throw new Error("WITHDRAW-SIGN: Guardian did not return a block");
+        lastBlockHash = withdrawRes.block_hash;
 
-      // PoW must be computed on the pool frontier (the block's previous field), not the block hash.
-      const workHash = typeof withdrawRes.block.previous === "string" ? withdrawRes.block.previous : withdrawRes.block_hash;
-      setStatusMessage("Computing proof of work...");
-      let work = await generateWorkTimed(workHash, "send");
-      const signedBlock = { ...withdrawRes.block, work };
-      const blockPrevious = String(signedBlock.previous);
-      if (!validateWork(work, blockPrevious, SEND_THRESHOLD)) {
-        log(`WARN: Withdraw work invalid; retrying`);
-        work = await generateWorkTimed(blockPrevious, "send");
-        signedBlock.work = work;
+        // PoW must be computed on the pool frontier (the block's previous field), not the block hash.
+        const blockPrevious = String(withdrawRes.block.previous);
+        setStatusMessage("Computing proof of work...");
+        let work = await generateWorkTimed(blockPrevious, "send");
+        const signedBlock = { ...withdrawRes.block, work };
         if (!validateWork(work, blockPrevious, SEND_THRESHOLD)) {
-          throw new Error("WITHDRAW-WORK: Generated work is invalid for withdraw block");
+          log(`WARN: Withdraw work invalid; retrying`);
+          work = await generateWorkTimed(blockPrevious, "send");
+          signedBlock.work = work;
+          if (!validateWork(work, blockPrevious, SEND_THRESHOLD)) {
+            throw new Error("WITHDRAW-WORK: Generated work is invalid for withdraw block");
+          }
+        }
+        try {
+          broadcastRes = (await apiPost("/api/broadcast_withdrawal", {
+            nullifier: nullifier.toString(16),
+            block: signedBlock,
+          })) as { broadcast_result?: { hash?: string }; ok?: boolean };
+          break;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (attempt < 3 && /fork|gap previous/i.test(msg)) {
+            log(`Pool frontier moved during proof of work; re-signing (attempt ${attempt + 1}/3)...`);
+            continue;
+          }
+          throw err;
         }
       }
-      const broadcastRes = (await apiPost("/api/broadcast_withdrawal", {
-        nullifier: nullifier.toString(16),
-        block: signedBlock,
-      })) as { broadcast_result?: { hash?: string }; ok?: boolean };
-      if (!broadcastRes.ok) throw new Error("WITHDRAW-BROADCAST: Guardian did not confirm broadcast");
+      if (!broadcastRes?.ok) throw new Error("WITHDRAW-BROADCAST: Guardian did not confirm broadcast");
       log(`Private send broadcasted to ${withdraw.address}`);
-      setWithdrawTx(broadcastRes.broadcast_result?.hash ?? withdrawRes.block_hash);
+      setWithdrawTx(broadcastRes.broadcast_result?.hash ?? lastBlockHash);
       setLastWithdrawAddress(withdraw.address);
       setWithdrawIndex((i) => i + 1);
       setWithdrawReady(false);

@@ -320,18 +320,24 @@ class VelaGuardian:
                 return {"error": "nullifier already spent"}
 
             # If we already signed this withdrawal, return the same signed block
-            # so the client can attach work and broadcast it.
+            # so the client can attach work and broadcast it — but only while
+            # the pool frontier has not moved. If another pool block landed in
+            # the meantime, the old block would be rejected as a Fork, so drop
+            # it and re-sign against the current frontier below.
             if N in self.pending_withdrawals:
                 pending = self.pending_withdrawals[N]
-                return {
-                    "ok": True,
-                    "block": pending["block"],
-                    "block_hash": pending["block_hash"],
-                    "nullifier": hex(N),
-                    "fee_raw": pending["fee_raw"],
-                    "send_amount_raw": pending["send_amount_raw"],
-                    "pending": True,
-                }
+                if str(pending["block"].get("previous", "")).lower() == previous.hex().lower():
+                    return {
+                        "ok": True,
+                        "block": pending["block"],
+                        "block_hash": pending["block_hash"],
+                        "nullifier": hex(N),
+                        "fee_raw": pending["fee_raw"],
+                        "send_amount_raw": pending["send_amount_raw"],
+                        "pending": True,
+                    }
+                print(f"withdraw: pool frontier moved; re-signing withdrawal for nullifier {hex(N)[:18]}...")
+                self.pending_withdrawals.pop(N, None)
 
             block_hash = nano_state_block_hash(
                 pool_pub,
