@@ -19,6 +19,8 @@ circuit/build/vela_js/witness.wtns
 
 # Environment
 .env
+.env.local
+.env.*.local
 .guardian_seed
 
 # Next.js / Vercel
@@ -28,3 +30,4 @@ circuit/build/vela_js/witness.wtns
 # IDE
 .vscode/
 .idea/
+.vercel

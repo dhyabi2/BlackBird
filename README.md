@@ -85,7 +85,7 @@ Save the output (`seed_view`, `A`, `B`).
 
 ### 4. Fund a source account
 
-Create or use an existing Nano account and send it at least `denomination + 1` raw (e.g., 1.000000001 XNO for the 1 XNO pool).
+Create or use an existing Nano account and send it at least the wallet-friendly amount shown in the UI (e.g., 1.000001 XNO for the 1 XNO pool). The UI adds 0.000001 XNO of padding so mobile wallets can display the full amount; the protocol itself only consumes `denomination + 1` raw.
 
 ### 5. Prepare a deposit
 

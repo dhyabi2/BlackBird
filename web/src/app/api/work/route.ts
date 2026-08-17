@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { generateWork, validateWork, type WorkType } from "nano-rspow-node";
 import { nanoRpcCall } from "@/lib/nano-rpc";
 import { ApiError } from "@/lib/errors";
 import { withApiHandler, optionsHandler } from "@/lib/api";
@@ -6,14 +7,22 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import { getClientIp } from "@/lib/ip";
 import { z } from "zod";
 
+// Work generation can be CPU-intensive. Allow up to 60s for the serverless function.
+export const maxDuration = 60;
 export const dynamic = "force-dynamic";
+
+const SEND_THRESHOLD = "fffffff800000000";
+const RECEIVE_THRESHOLD = "fffffe0000000000";
 
 const workSchema = z.object({
   hash: z.string().regex(/^[0-9a-fA-F]{64}$/, "Invalid 64-character hex hash"),
   difficulty: z.string().regex(/^[0-9a-fA-F]{16}$/, "Invalid 16-character hex threshold").optional(),
 });
 
-const DEFAULT_WORK_THRESHOLD = "ffffffc000000000";
+function workTypeForDifficulty(difficulty: string): WorkType {
+  // Send/change threshold is the higher difficulty. Anything else is treated as receive/open.
+  return (difficulty.toLowerCase() === SEND_THRESHOLD ? "Send" : "Receive") as WorkType;
+}
 
 export function OPTIONS() {
   return optionsHandler();
@@ -36,24 +45,28 @@ export async function POST(request: NextRequest) {
       throw new ApiError(429, "Rate limit exceeded");
     }
 
-    const threshold = parsed.data.difficulty ?? DEFAULT_WORK_THRESHOLD;
+    const threshold = parsed.data.difficulty ?? RECEIVE_THRESHOLD;
+    const type = workTypeForDifficulty(threshold);
+    const hash = parsed.data.hash;
 
-    // Use only rpc.nano.to for work generation. We trust the work it returns,
-    // matching the XNO_TEMPLATE pattern, because the network will reject an
-    // invalid work value during process anyway.
-    const rpcResult = (await nanoRpcCall("work_generate", {
-      hash: parsed.data.hash,
-      difficulty: threshold,
-    })) as {
-      work?: string;
-      difficulty?: string;
-    };
+    // BPMN: the Web App proxies work generation to rpc.nano.to. If rpc.nano.to returns
+    // unusable work (e.g., a free/cached value below the requested threshold), fall back
+    // to local CPU generation so the client always receives valid work. No extra RPC
+    // endpoints are introduced.
+    try {
+      const rpcResult = (await nanoRpcCall("work_generate", {
+        hash,
+        difficulty: threshold,
+      })) as { work?: string };
 
-    const work = rpcResult.work;
-    if (!work) {
-      throw new ApiError(502, "Work generator did not return work");
+      if (rpcResult.work && validateWork(hash, rpcResult.work, type)) {
+        return { work: rpcResult.work };
+      }
+    } catch {
+      // rpc.nano.to failed or returned invalid work; generate locally.
     }
 
+    const work = await generateWork(hash, type);
     return { work };
   });
 }

@@ -53,6 +53,7 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  serverExternalPackages: ["nano-rspow-node"],
   turbopack: {
     root: path.resolve(import.meta.dirname ?? __dirname),
   },

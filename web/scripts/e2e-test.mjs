@@ -1,43 +1,28 @@
 import * as fs from "fs";
 import * as path from "path";
-import * as nano from "nanocurrency";
 import { poseidon9, poseidon3 } from "poseidon-lite";
-import { blake2b } from "blakejs";
+import blakejs from "blakejs";
+const { blake2b } = blakejs;
 import { fileURLToPath } from "url";
 import { loadTestWallets, encryptWallets, hasEncryptedStore } from "./wallet-store.mjs";
+import {
+  generateWallet,
+  buildSendBlock,
+  buildReceiveBlock,
+  fetchAccountHistory,
+  workHashForReceive,
+  rawToNano,
+  nanoToRaw,
+  ZERO_HASH,
+  SEND_THRESHOLD,
+  RECEIVE_THRESHOLD,
+  DEFAULT_REP,
+} from "./nano.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const WALLETS_FILE = path.join(ROOT, "test-wallets.json.enc");
 const BASE_URL = process.env.VELA_BASE_URL || "https://velav2-web.vercel.app";
-const ZERO_HASH = "0".repeat(64);
-
-function ensureNanoPrefix(address) {
-  if (address.startsWith("xrb_")) return "nano_" + address.slice(4);
-  return address;
-}
-
-function generateWallet(seed, index) {
-  const secretKey = nano.deriveSecretKey(seed, index);
-  const publicKey = nano.derivePublicKey(secretKey);
-  const address = nano.deriveAddress(publicKey, { useNanoPrefix: true });
-  return { seed, index, secretKey, publicKey, address };
-}
-
-function buildBlock(secretKey, { previous, representative, balance, link, work }) {
-  const block = nano.createBlock(secretKey, {
-    work,
-    previous,
-    representative,
-    balance,
-    link,
-  });
-  const cleaned = { ...block.block };
-  delete cleaned.link_as_account;
-  cleaned.account = ensureNanoPrefix(String(cleaned.account));
-  cleaned.representative = ensureNanoPrefix(String(cleaned.representative));
-  return { hash: block.hash, block: cleaned };
-}
 
 async function apiGet(path) {
   const res = await fetch(`${BASE_URL}${path}`);
@@ -57,16 +42,11 @@ async function apiPost(path, body) {
   return data;
 }
 
-const SEND_THRESHOLD = "fffffff800000000";
-const RECEIVE_THRESHOLD = "fffffe0000000000";
-
-function workHashForReceive(previous, publicKey) {
-  // For the first (open) receive block, work is generated on the account public key.
-  return previous === ZERO_HASH ? publicKey : previous;
-}
-
-async function computeWork(hash, threshold) {
-  return nano.computeWork(hash, { workThreshold: threshold });
+async function generateWork(hash, subtype = "send") {
+  const difficulty = subtype === "send" ? SEND_THRESHOLD : RECEIVE_THRESHOLD;
+  const res = await apiPost("/api/work", { hash, difficulty });
+  if (!res.work) throw new Error("Work generator did not return work");
+  return res.work;
 }
 
 async function fetchAccountInfo(account) {
@@ -77,9 +57,9 @@ async function fetchPending(account) {
   return apiGet(`/api/pending?account=${encodeURIComponent(account)}`);
 }
 
-async function broadcastBlock(block) {
+async function broadcastBlock(block, subtype) {
   try {
-    return await apiPost("/api/broadcast", { block });
+    return await apiPost("/api/broadcast", { block, subtype });
   } catch (err) {
     // An "Old block" response means the exact block is already in the ledger,
     // which is equivalent to a successful broadcast.
@@ -90,34 +70,12 @@ async function broadcastBlock(block) {
   }
 }
 
-async function fetchAccountHistoryDirect(account) {
-  const res = await fetch("https://node.somenano.com/proxy", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "account_history", account, count: 100 }),
-  });
-  const data = await res.json();
-  if (data.error) throw new Error(`account_history error: ${JSON.stringify(data.error)}`);
-  return data.history || [];
-}
-
-async function fetchAccountHistoryRaw(account) {
-  const res = await fetch("https://node.somenano.com/proxy", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "account_history", account, count: 100, raw: true }),
-  });
-  const data = await res.json();
-  if (data.error) throw new Error(`account_history error: ${JSON.stringify(data.error)}`);
-  return data.history || [];
-}
-
 function isHex64(s) {
   return /^[0-9a-fA-F]{64}$/.test(s);
 }
 
 async function findDepositCommitHashes(sourceAddress, poolPubkeyHex) {
-  const history = await fetchAccountHistoryRaw(sourceAddress);
+  const history = await fetchAccountHistory(sourceAddress, { count: 100, raw: true });
   const poolLower = poolPubkeyHex.toLowerCase();
   for (let i = 0; i < history.length; i++) {
     const h = history[i];
@@ -139,6 +97,36 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitForConfirmation(hashes, timeoutMs = 60_000, intervalMs = 3_000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const blocks = await apiPost("/api/blocks_info", { hashes });
+      if (hashes.every((h) => blocks[h]?.confirmed === "true")) return true;
+    } catch {
+      // keep polling
+    }
+    await sleep(intervalMs);
+  }
+  return false;
+}
+
+async function submitDepositWithRetry(depositHash, commitHash, maxAttempts = 12, intervalMs = 5_000) {
+  let lastError;
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      return await apiPost("/api/deposit", { deposit_hash: depositHash, commit_hash: commitHash });
+    } catch (err) {
+      lastError = err;
+      const msg = String(err.message || err);
+      if (!msg.toLowerCase().includes("invalid deposit/commit pair")) throw err;
+      console.log(`  indexer not ready, retry ${i + 1}/${maxAttempts} ...`);
+      if (i < maxAttempts - 1) await sleep(intervalMs);
+    }
+  }
+  throw lastError;
+}
+
 function loadWallets() {
   if (!hasEncryptedStore()) {
     throw new Error(`No encrypted wallets file. Run: node scripts/e2e-test.mjs init`);
@@ -155,11 +143,11 @@ function saveWallets(wallets) {
 }
 
 async function cmdInit() {
-  const fundingSeed = await nano.generateSeed();
+  const fundingSeed = await generateSeed();
   const funding = generateWallet(fundingSeed, 0);
   const receivers = [];
   for (let i = 0; i < 10; i++) {
-    const seed = await nano.generateSeed();
+    const seed = await generateSeed();
     receivers.push(generateWallet(seed, 0));
   }
   const data = {
@@ -200,22 +188,24 @@ async function cmdReceiveFunding() {
   }
   console.log(`Found pending send ${sendHash} with amount ${amountRaw} raw`);
 
-  const work = await computeWork(workHashForReceive(ZERO_HASH, funding.publicKey), RECEIVE_THRESHOLD);
-  const receiveBlock = buildBlock(funding.secretKey, {
+  const work = await generateWork(workHashForReceive(ZERO_HASH, funding.publicKey), "receive");
+  const receiveBlock = buildReceiveBlock(funding.secretKey, {
+    toAddress: funding.address,
     previous: ZERO_HASH,
     representative: funding.address,
-    balance: amountRaw,
-    link: sendHash,
+    transactionHash: sendHash,
+    balance: "0",
+    amount: amountRaw,
     work,
   });
   console.log(`Open/receive hash: ${receiveBlock.hash}`);
-  await broadcastBlock(receiveBlock.block);
+  await broadcastBlock(receiveBlock.block, "receive");
   console.log("Funding receive broadcasted.");
 }
 
 async function reconstructSendHashesFromHistory(data) {
   const { funding, receivers } = data;
-  const history = await fetchAccountHistoryDirect(funding.address);
+  const history = await fetchAccountHistory(funding.address);
   const sends = history.filter((h) => h.type === "send");
   const newSendHashes = [];
   for (const receiver of receivers) {
@@ -241,7 +231,7 @@ async function cmdSplit() {
   await reconstructSendHashesFromHistory(data);
   const sendHashes = data.sendHashes || [];
 
-  const amountRaw = nano.convert("0.1", { from: "NANO", to: "raw" });
+  const amountRaw = nanoToRaw("0.1");
   const startIndex = sendHashes.length;
   const remaining = receivers.length - startIndex;
   if (remaining === 0) {
@@ -260,21 +250,24 @@ async function cmdSplit() {
   let balance = startBalance;
   for (let i = startIndex; i < receivers.length; i++) {
     const receiver = receivers[i];
-    balance -= BigInt(amountRaw);
-    const sendBlock = buildBlock(funding.secretKey, {
+    const amount = BigInt(amountRaw);
+    balance -= amount;
+    const sendBlock = buildSendBlock(funding.secretKey, {
+      fromAddress: funding.address,
       previous,
       representative: funding.address,
       balance: balance.toString(),
       link: receiver.address,
-      work: await computeWork(previous, SEND_THRESHOLD),
+      amount: amount.toString(),
+      work: await generateWork(previous, "send"),
     });
     console.log(`Send ${i + 1}/${receivers.length} to ${receiver.address}: ${sendBlock.hash}`);
     try {
-      await broadcastBlock(sendBlock.block);
+      await broadcastBlock(sendBlock.block, "send");
     } catch (err) {
       if (String(err.message).includes("Old block")) {
         // The block may already be confirmed; recover its hash from history.
-        const history = await fetchAccountHistoryDirect(funding.address);
+        const history = await fetchAccountHistory(funding.address);
         const found = history.find((h) => h.type === "send" && h.account === receiver.address);
         if (!found) throw err;
         console.log(`  already on-chain, using ${found.hash}`);
@@ -299,21 +292,23 @@ async function cmdReceiveSplit() {
   if (sendHashes.length !== receivers.length) {
     throw new Error("Run split first");
   }
-  const amountRaw = nano.convert("0.1", { from: "NANO", to: "raw" });
+  const amountRaw = nanoToRaw("0.1");
   for (let i = 0; i < receivers.length; i++) {
     const receiver = receivers[i];
     const sendHash = sendHashes[i].hash;
     console.log(`Receiving ${i + 1}/${receivers.length} for ${receiver.address} ...`);
-    const work = await computeWork(workHashForReceive(ZERO_HASH, receiver.publicKey), RECEIVE_THRESHOLD);
-    const receiveBlock = buildBlock(receiver.secretKey, {
+    const work = await generateWork(workHashForReceive(ZERO_HASH, receiver.publicKey), "receive");
+    const receiveBlock = buildReceiveBlock(receiver.secretKey, {
+      toAddress: receiver.address,
       previous: ZERO_HASH,
       representative: receiver.address,
-      balance: amountRaw,
-      link: sendHash,
+      transactionHash: sendHash,
+      balance: "0",
+      amount: amountRaw,
       work,
     });
     console.log(`  receive hash: ${receiveBlock.hash}`);
-    await broadcastBlock(receiveBlock.block);
+    await broadcastBlock(receiveBlock.block, "receive");
   }
   console.log("All 10 receives broadcasted.");
 }
@@ -323,7 +318,7 @@ async function cmdStatus() {
   console.log("Funding:");
   try {
     const info = await fetchAccountInfo(funding.address);
-    console.log(`  ${funding.address}: ${nano.convert(info.balance, { from: "raw", to: "NANO" })} XNO`);
+    console.log(`  ${funding.address}: ${rawToNano(info.balance)} XNO`);
   } catch (e) {
     console.log(`  ${funding.address}: not opened / ${e.message}`);
   }
@@ -331,7 +326,7 @@ async function cmdStatus() {
   for (const r of receivers) {
     try {
       const info = await fetchAccountInfo(r.address);
-      console.log(`  ${r.address}: ${nano.convert(info.balance, { from: "raw", to: "NANO" })} XNO`);
+      console.log(`  ${r.address}: ${rawToNano(info.balance)} XNO`);
     } catch (e) {
       console.log(`  ${r.address}: not opened / ${e.message}`);
     }
@@ -396,7 +391,7 @@ async function fetchEpoch() {
 }
 
 async function runVelaCycleForWallet(sourceWallet, withdrawWallet, resume = false) {
-  const denomRaw = nano.convert("0.1", { from: "NANO", to: "raw" });
+  const denomRaw = nanoToRaw("0.1");
   const poolInfo = await fetchPoolInfo(denomRaw);
   const poolPubkeyHex = poolInfo.pool_pubkey;
   const S_pub = hexToBytes(poolPubkeyHex);
@@ -428,35 +423,43 @@ async function runVelaCycleForWallet(sourceWallet, withdrawWallet, resume = fals
     }
 
     // Deposit block
-    const depositBlock = buildBlock(sourceWallet.secretKey, {
+    const depositBlock = buildSendBlock(sourceWallet.secretKey, {
+      fromAddress: sourceWallet.address,
       previous: sourceInfo.frontier,
       representative: sourceInfo.representative,
       balance: (balance - BigInt(denomRaw)).toString(),
       link: poolPubkeyHex,
-      work: await computeWork(sourceInfo.frontier, SEND_THRESHOLD),
+      amount: denomRaw,
+      work: await generateWork(sourceInfo.frontier, "send"),
     });
     depositHash = depositBlock.hash;
     console.log(`  deposit hash: ${depositHash}`);
-    await broadcastBlock(depositBlock.block);
+    await broadcastBlock(depositBlock.block, "send");
 
     // Commitment block
-    const commitBlock = buildBlock(sourceWallet.secretKey, {
+    const commitBlock = buildSendBlock(sourceWallet.secretKey, {
+      fromAddress: sourceWallet.address,
       previous: depositHash,
       representative: sourceInfo.representative,
       balance: (balance - BigInt(denomRaw) - BigInt(1)).toString(),
       link: C_hex,
-      work: await computeWork(depositHash, SEND_THRESHOLD),
+      amount: "1",
+      work: await generateWork(depositHash, "send"),
     });
     commitHash = commitBlock.hash;
     console.log(`  commit hash: ${commitHash}`);
-    await broadcastBlock(commitBlock.block);
+    await broadcastBlock(commitBlock.block, "send");
   }
 
-  // Submit to indexer
-  const depositRes = await apiPost("/api/deposit", {
-    deposit_hash: depositHash,
-    commit_hash: commitHash,
-  });
+  // Wait for on-chain confirmation before asking the indexer to accept the pair.
+  console.log("  waiting for deposit/commit confirmation...");
+  const confirmed = await waitForConfirmation([depositHash, commitHash]);
+  if (!confirmed) {
+    throw new Error("Deposit/commit blocks were not confirmed in time");
+  }
+
+  // Submit to indexer, retrying while the backend RPC catches up to rpc.nano.to.
+  const depositRes = await submitDepositWithRetry(depositHash, commitHash);
   console.log(`  indexer commitment: ${depositRes.commitment}`);
 
   // Withdraw using the epoch the indexer assigned to this deposit.
@@ -488,9 +491,10 @@ async function runVelaCycleForWallet(sourceWallet, withdrawWallet, resume = fals
   console.log(`  guardian block hash: ${withdrawRes.block_hash}`);
 
   // PoW for a state block is computed on the previous block hash (pool frontier).
-  const work = await computeWork(withdrawRes.block.previous, SEND_THRESHOLD);
+  const workHash = typeof withdrawRes.block.previous === "string" ? withdrawRes.block.previous : withdrawRes.block_hash;
+  const work = await generateWork(workHash, "send");
   const signedBlock = { ...withdrawRes.block, work };
-  await broadcastBlock(signedBlock);
+  await broadcastBlock(signedBlock, "send");
   console.log(`  withdrawal broadcasted to ${withdrawWallet.address}`);
 }
 
@@ -546,7 +550,7 @@ async function cmdPrepareVela() {
   // Standard Nano address derived from the guardian pool public key.
   const GUARDIAN_POOL = "nano_1sd1mjk1t9cynhn6z74rqu5fisu7szukkq9zs3oimiom6yqnekzff1dj4aqi";
   const ONE_RAW = "1";
-  const amountRaw = nano.convert("0.1", { from: "NANO", to: "raw" });
+  const amountRaw = nanoToRaw("0.1");
 
   // Step 1: send 1 raw from funder wallet (i+5) to source wallet (i).
   // Skip funders that already sent their top-up (balance < 0.1 XNO).
@@ -559,15 +563,17 @@ async function cmdPrepareVela() {
       console.log(`Topup source ${i} from funder ${i + 5}: already sent`);
       continue;
     }
-    const sendBlock = buildBlock(funder.secretKey, {
+    const sendBlock = buildSendBlock(funder.secretKey, {
+      fromAddress: funder.address,
       previous: info.frontier,
       representative: funder.address,
       balance: (balance - BigInt(ONE_RAW)).toString(),
       link: source.address,
-      work: await computeWork(info.frontier, SEND_THRESHOLD),
+      amount: ONE_RAW,
+      work: await generateWork(info.frontier, "send"),
     });
     console.log(`Topup source ${i} from funder ${i + 5}: ${sendBlock.hash}`);
-    await broadcastBlock(sendBlock.block);
+    await broadcastBlock(sendBlock.block, "send");
   }
 
   // Step 2: source wallets receive the 1 raw top-up.
@@ -589,15 +595,17 @@ async function cmdPrepareVela() {
       continue;
     }
     const [sendHash] = match;
-    const receiveBlock = buildBlock(source.secretKey, {
+    const receiveBlock = buildReceiveBlock(source.secretKey, {
+      toAddress: source.address,
       previous: info.frontier,
       representative: info.representative,
-      balance: (balance + BigInt(ONE_RAW)).toString(),
-      link: sendHash,
-      work: await computeWork(info.frontier, RECEIVE_THRESHOLD),
+      transactionHash: sendHash,
+      balance: balance.toString(),
+      amount: ONE_RAW,
+      work: await generateWork(info.frontier, "receive"),
     });
     console.log(`Source ${i} receive topup: ${receiveBlock.hash}`);
-    await broadcastBlock(receiveBlock.block);
+    await broadcastBlock(receiveBlock.block, "receive");
   }
 
   // Step 3: funders send remaining balances to guardian pool.
@@ -609,15 +617,17 @@ async function cmdPrepareVela() {
       console.log(`Funder ${i + 5} empty`);
       continue;
     }
-    const sendBlock = buildBlock(funder.secretKey, {
+    const sendBlock = buildSendBlock(funder.secretKey, {
+      fromAddress: funder.address,
       previous: info.frontier,
       representative: funder.address,
       balance: "0",
       link: GUARDIAN_POOL,
-      work: await computeWork(info.frontier, SEND_THRESHOLD),
+      amount: balance.toString(),
+      work: await generateWork(info.frontier, "send"),
     });
-    console.log(`Funder ${i + 5} -> guardian: ${sendBlock.hash} (${nano.convert(balance.toString(), { from: "raw", to: "NANO" })} XNO)`);
-    await broadcastBlock(sendBlock.block);
+    console.log(`Funder ${i + 5} -> guardian: ${sendBlock.hash} (${rawToNano(balance.toString())} XNO)`);
+    await broadcastBlock(sendBlock.block, "send");
   }
 
   console.log("Prepare complete. Guardian pool funded and sources topped up.");
@@ -638,19 +648,26 @@ async function cmdSweep() {
         console.log(`  ${wallet.address}: empty`);
         continue;
       }
-      const sendBlock = buildBlock(wallet.secretKey, {
+      const sendBlock = buildSendBlock(wallet.secretKey, {
+        fromAddress: wallet.address,
         previous: info.frontier,
         representative: wallet.address,
         balance: "0",
         link: destination,
-        work: await computeWork(info.frontier, SEND_THRESHOLD),
+        amount: balance.toString(),
+        work: await generateWork(info.frontier, "send"),
       });
-      console.log(`  sweep ${i + 1}/${receivers.length}: ${sendBlock.hash} (${nano.convert(balance.toString(), { from: "raw", to: "NANO" })} XNO)`);
-      await broadcastBlock(sendBlock.block);
+      console.log(`  sweep ${i + 1}/${receivers.length}: ${sendBlock.hash} (${rawToNano(balance.toString())} XNO)`);
+      await broadcastBlock(sendBlock.block, "send");
     } catch (err) {
       console.error(`  ${wallet.address}: ${err.message}`);
     }
   }
+}
+
+async function generateSeed() {
+  const crypto = await import("crypto");
+  return crypto.randomBytes(32).toString("hex").toUpperCase();
 }
 
 async function main() {

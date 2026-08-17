@@ -3,12 +3,18 @@
 import "@/lib/polyfills";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import { deriveLegacyAccount, buildSendBlock, buildReceiveBlock } from "@/lib/wallet";
+import {
+  deriveLegacyAccount,
+  buildSendBlock,
+  buildReceiveBlock,
+  rawToNano,
+  nanoToRaw,
+} from "@/lib/wallet";
 import { encryptSeed, decryptSeed } from "@/lib/crypto-storage";
 import { createBackupPhrase, phraseToSeedHex } from "@/lib/mnemonic";
 import { computeCommitment, computeNullifier, hexToBytes, bytesToHex } from "@/lib/vela-crypto";
 import { blake2b } from "blakejs";
-import { convert, Unit } from "nanocurrency";
+
 import { Button } from "@/components/ui/Button";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { useNanoWebsocket } from "@/lib/nano-ws";
@@ -21,6 +27,23 @@ const ZERO_HASH = "0000000000000000000000000000000000000000000000000000000000000
 const DEFAULT_REP = "nano_3jwrszth46rk1mu7rmb4rhm54us8yg1gw3ipodftqtikf5yqdyr7471nsg1k";
 const SEND_THRESHOLD = "fffffff800000000";
 const RECEIVE_THRESHOLD = "fffffe0000000000";
+
+function workHashForReceive(previous: string, publicKey: string): string {
+  // For an open (first) receive block, work is generated on the account public key.
+  return previous === ZERO_HASH ? publicKey : previous;
+}
+
+async function generateWork(hash: string, subtype: "send" | "receive"): Promise<string> {
+  if (!hash || typeof hash !== "string") {
+    throw new Error(`DEPOSIT-WORK: Invalid work hash (${typeof hash})`);
+  }
+  const difficulty = subtype === "send" ? SEND_THRESHOLD : RECEIVE_THRESHOLD;
+  const res = await apiPost("/api/work", { hash, difficulty });
+  if (!res.work || !/^[0-9a-fA-F]{16}$/.test(res.work)) {
+    throw new Error("Work generator returned an invalid work value");
+  }
+  return res.work;
+}
 
 const DENOMINATIONS = [
   { raw: ALLOWED_DENOMINATIONS[0], label: "0.1 XNO" },
@@ -40,17 +63,22 @@ function deriveSecretBytes(seedHex: string, P_w_hex: string, salt: string): Uint
   return blake2b(input, undefined, 32) as Uint8Array;
 }
 
-function rawToNano(raw: string): string {
-  return convert(raw, { from: Unit.raw, to: Unit.NANO });
-}
-
 function nano(raw: bigint): string {
-  return rawToNano(raw.toString());
+  const full = rawToNano(raw.toString());
+  if (!full.includes(".")) return full;
+  const trimmed = full.replace(/0+$/, "").replace(/\.$/, "");
+  return trimmed;
 }
 
 function withdrawFeeRaw(denominationRaw: bigint, bps: number): bigint {
   return (denominationRaw * BigInt(bps)) / BigInt(10_000);
 }
+
+// Mobile wallets such as Natrium only display amounts to 6 decimal places.
+// Ask for denomination + 0.000001 XNO so the QR code auto-fills an amount
+// the wallet can actually send. The protocol still only consumes
+// denomination + 1 raw; the remainder stays as dust in the shield address.
+const WALLET_FRIENDLY_PADDING_RAW = BigInt(10) ** BigInt(24); // 0.000001 XNO
 
 function explorerLink(hash: string) {
   return `https://nanolooker.com/block/${hash}`;
@@ -63,15 +91,56 @@ async function apiPost(path: string, body: unknown) {
     body: JSON.stringify(body),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `Request failed: ${res.status}`);
+  if (!res.ok) throw new Error(`${path}: ${data.error || `Request failed: ${res.status}`}`);
   return data;
 }
 
 async function apiGet(path: string) {
   const res = await fetch(path);
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `Request failed: ${res.status}`);
+  if (!res.ok) throw new Error(`${path}: ${data.error || `Request failed: ${res.status}`}`);
   return data;
+}
+
+async function waitForConfirmation(hashes: string[], timeoutMs = 60_000, intervalMs = 3_000): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const blocks = (await apiPost("/api/blocks_info", { hashes })) as Record<string, { confirmed?: string }>;
+      if (hashes.every((h) => blocks[h]?.confirmed === "true")) return true;
+    } catch {
+      // keep polling
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return false;
+}
+
+async function submitDepositWithRetry(
+  depositHash: string,
+  commitHash: string,
+  setStatus: (msg: string | null) => void,
+  maxAttempts = 12,
+  intervalMs = 5_000
+) {
+  let lastError: unknown;
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      return await apiPost("/api/deposit", {
+        deposit_hash: depositHash,
+        commit_hash: commitHash,
+      });
+    } catch (err) {
+      lastError = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.toLowerCase().includes("invalid deposit/commit pair")) throw err;
+      if (i < maxAttempts - 1) {
+        setStatus(`Waiting for indexer to see the deposit/commit pair... (${i + 1}/${maxAttempts})`);
+        await new Promise((r) => setTimeout(r, intervalMs));
+      }
+    }
+  }
+  throw lastError;
 }
 
 function recommendDenomination(balanceRaw: string | null, pendingRaw: string | null): string {
@@ -362,19 +431,21 @@ export default function EasyWallet() {
     const representative = rep || DEFAULT_REP;
 
     const isOpen = !sourceInfo.frontier;
-    const workHash = isOpen ? source.publicKey : sourceInfo.frontier!;
-    const work = (await apiPost("/api/work", { hash: workHash, difficulty: RECEIVE_THRESHOLD })).work;
+    const workHash = workHashForReceive(isOpen ? ZERO_HASH : sourceInfo.frontier!, source.publicKey);
+    const work = await generateWork(workHash, "receive");
     const newBalance = (currentBalance + chosenAmount).toString();
 
     const receiveBlock = buildReceiveBlock(source.secretKey, {
+      toAddress: source.address,
       previous: isOpen ? ZERO_HASH : sourceInfo.frontier!,
       representative,
-      balance: newBalance,
-      link: chosenHash,
+      transactionHash: chosenHash,
+      balance: currentBalance.toString(),
+      amount: chosenAmount.toString(),
       work,
     });
     log(`Receive hash: ${receiveBlock.hash}`);
-    await apiPost("/api/broadcast", { block: receiveBlock.block });
+    await apiPost("/api/broadcast", { block: receiveBlock.block, subtype: "receive" });
     log("Receive broadcasted");
 
     return waitForBalance(newBalance);
@@ -391,15 +462,24 @@ export default function EasyWallet() {
       let bal = BigInt(balance ?? "0");
 
       // Auto-receive pending sends if the source balance is not yet spendable.
+      let currentSourceInfo = sourceInfo;
       if (bal < required) {
         const pendingSum = BigInt(pendingRaw ?? "0");
         if (bal + pendingSum < required) {
-          throw new Error(`Send at least ${nano(required)} XNO to your shield address first`);
+          throw new Error(`Send at least ${nano(fundAmountRaw)} XNO to your shield address first`);
         }
         setStatusMessage("Receiving pending funds...");
         const received = await receivePending(required);
-        if (!received) throw new Error("Could not receive funds in time. Try again.");
-        bal = BigInt(balance ?? "0");
+        if (!received) throw new Error("RECEIVE-PENDING: Could not receive funds in time. Try again.");
+        // State captured by this closure is stale; fetch the updated balance/frontier directly.
+        const freshInfo = await apiGet(`/api/account_info?account=${encodeURIComponent(source.address)}`);
+        bal = BigInt(freshInfo.balance ?? "0");
+        currentSourceInfo = {
+          frontier: freshInfo.frontier ?? null,
+          representative: freshInfo.representative ?? null,
+        };
+        setBalance(freshInfo.balance ?? "0");
+        setSourceInfo(currentSourceInfo);
       }
 
       const poolData = await apiGet(`/api/pool_address/${effectiveDenom}`);
@@ -412,34 +492,48 @@ export default function EasyWallet() {
       const C_hex = C.toString(16).padStart(64, "0");
       log(`Commitment: ${C_hex.slice(0, 16)}...`);
 
+      if (!currentSourceInfo.frontier) {
+        throw new Error("DEPOSIT-FRONTIER: Source account frontier is not available after receiving.");
+      }
+      setStatusMessage("Computing proof of work for deposit...");
+      const depositWork = await generateWork(currentSourceInfo.frontier, "send");
       setStatusMessage("Broadcasting deposit block...");
       const depositBlock = buildSendBlock(source.secretKey, {
-        previous: sourceInfo.frontier!,
-        representative: sourceInfo.representative!,
+        fromAddress: source.address,
+        previous: currentSourceInfo.frontier,
+        representative: currentSourceInfo.representative || DEFAULT_REP,
         balance: (bal - denom).toString(),
         link: poolPubHex,
-        work: (await apiPost("/api/work", { hash: sourceInfo.frontier!, difficulty: SEND_THRESHOLD })).work,
+        amount: denom.toString(),
+        work: depositWork,
       });
       log(`Deposit hash: ${depositBlock.hash}`);
-      await apiPost("/api/broadcast", { block: depositBlock.block });
+      await apiPost("/api/broadcast", { block: depositBlock.block, subtype: "send" });
       log("Deposit broadcasted");
 
+      setStatusMessage("Computing proof of work for commitment...");
+      const commitWork = await generateWork(depositBlock.hash, "send");
       setStatusMessage("Broadcasting commitment block...");
       const commitBlock = buildSendBlock(source.secretKey, {
+        fromAddress: source.address,
         previous: depositBlock.hash,
-        representative: sourceInfo.representative!,
+        representative: currentSourceInfo.representative || DEFAULT_REP,
         balance: (bal - denom - BigInt(1)).toString(),
         link: C_hex,
-        work: (await apiPost("/api/work", { hash: depositBlock.hash, difficulty: SEND_THRESHOLD })).work,
+        amount: "1",
+        work: commitWork,
       });
       log(`Commit hash: ${commitBlock.hash}`);
-      await apiPost("/api/broadcast", { block: commitBlock.block });
+      await apiPost("/api/broadcast", { block: commitBlock.block, subtype: "send" });
       log("Commitment broadcasted");
 
-      await apiPost("/api/deposit", {
-        deposit_hash: depositBlock.hash,
-        commit_hash: commitBlock.hash,
-      });
+      setStatusMessage("Waiting for deposit/commit confirmation...");
+      const confirmed = await waitForConfirmation([depositBlock.hash, commitBlock.hash]);
+      if (!confirmed) {
+        throw new Error("DEPOSIT-CONFIRM: Deposit/commit blocks were not confirmed in time.");
+      }
+
+      await submitDepositWithRetry(depositBlock.hash, commitBlock.hash, setStatusMessage);
       log("Indexer accepted deposit.");
       setDepositTx({ depositHash: depositBlock.hash, commitHash: commitBlock.hash });
       setDepositDone(true);
@@ -496,7 +590,7 @@ export default function EasyWallet() {
         denomination: String(effectiveDenom),
         epoch,
       });
-      if (!proofRes.proof || !proofRes.publicSignals) throw new Error("Proof failed");
+      if (!proofRes.proof || !proofRes.publicSignals) throw new Error("WITHDRAW-PROOF: Proof response missing proof or publicSignals");
       log("Proof generated");
 
       setStatusMessage("Requesting guardian signature...");
@@ -508,18 +602,18 @@ export default function EasyWallet() {
         proof: proofRes.proof,
         publicSignals: proofRes.publicSignals,
       });
-      if (!withdrawRes.block || !withdrawRes.block_hash) throw new Error("Guardian did not return a block");
+      if (!withdrawRes.block || !withdrawRes.block_hash) throw new Error("WITHDRAW-SIGN: Guardian did not return a block");
 
       // PoW must be computed on the pool frontier (the block's previous field), not the block hash.
       const workHash = typeof withdrawRes.block.previous === "string" ? withdrawRes.block.previous : withdrawRes.block_hash;
       setStatusMessage("Computing proof of work...");
-      const work = (await apiPost("/api/work", { hash: workHash, difficulty: SEND_THRESHOLD })).work;
+      const work = await generateWork(workHash, "send");
       const signedBlock = { ...withdrawRes.block, work };
       const broadcastRes = (await apiPost("/api/broadcast_withdrawal", {
         nullifier: nullifier.toString(16),
         block: signedBlock,
       })) as { broadcast_result?: { hash?: string }; ok?: boolean };
-      if (!broadcastRes.ok) throw new Error("Guardian did not confirm broadcast");
+      if (!broadcastRes.ok) throw new Error("WITHDRAW-BROADCAST: Guardian did not confirm broadcast");
       log(`Private send broadcasted to ${withdraw.address}`);
       setWithdrawTx(broadcastRes.broadcast_result?.hash ?? withdrawRes.block_hash);
       setLastWithdrawAddress(withdraw.address);
@@ -536,17 +630,19 @@ export default function EasyWallet() {
     }
   }
 
-  const depositAmountRaw = useMemo(
-    () => BigInt(effectiveDenom) + BigInt(1),
+  const fundAmountRaw = useMemo(
+    () => BigInt(effectiveDenom) + WALLET_FRIENDLY_PADDING_RAW,
     [effectiveDenom]
   );
-  const depositAmountText = useMemo(() => nano(depositAmountRaw), [depositAmountRaw]);
+  const depositAmountText = useMemo(() => nano(fundAmountRaw), [fundAmountRaw]);
 
   const depositUri = useMemo(() => {
     if (!source) return "";
     // Nano URI amount must be in raw (integer) for wallet apps to auto-fill it.
-    return `nano:${source.address}?amount=${depositAmountRaw.toString()}`;
-  }, [source, depositAmountRaw]);
+    // Use a 6-decimal padding amount so wallets like Natrium don't round away
+    // the required 1 raw commitment.
+    return `nano:${source.address}?amount=${fundAmountRaw.toString()}`;
+  }, [source, fundAmountRaw]);
 
   function HighlightedAmount({ amount }: { amount: string }) {
     if (!amount) return null;
@@ -714,6 +810,10 @@ export default function EasyWallet() {
             <h2 className="font-semibold">Fund your shield address</h2>
             <p className="text-sm text-black/50">
               Send exactly <HighlightedAmount amount={depositAmountText} /> to this temporary address.
+            </p>
+            <p className="text-xs text-black/50">
+              The QR amount includes a tiny buffer so mobile wallets display it correctly.
+              The shield only uses {nano(BigInt(effectiveDenom))} XNO + 1 raw; the rest stays as dust in this address.
             </p>
             {greenlight?.ok && source && (
               <div className="mt-4">

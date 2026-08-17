@@ -1,7 +1,8 @@
 import { z } from "zod";
 
+// All Nano RPC calls are hard-coded to rpc.nano.to below; this endpoint is not
+// configurable so the app cannot accidentally proxy calls to another node.
 const envSchema = z.object({
-  NANO_RPC_ENDPOINT: z.string().url().default("https://rpc.nano.to"),
   NANO_RPC_KEY: z.string().min(1, "NANO_RPC_KEY is required"),
   VELA_BACKEND_URL: z.string().url(),
   VELA_BACKEND_API_KEY: z.string().min(1, "VELA_BACKEND_API_KEY is required"),

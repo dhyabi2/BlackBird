@@ -1,5 +1,9 @@
 import { getEnv } from "./env";
 
+// BlackBird talks to exactly one Nano RPC endpoint. The endpoint is hard-coded
+// so environment variables cannot redirect calls to a different node.
+const NANO_RPC_ENDPOINT = "https://rpc.nano.to";
+
 export type NanoRpcResponse<T = unknown> =
   | { error: string }
   | T;
@@ -9,7 +13,7 @@ export async function nanoRpcCall<T = unknown>(
   params: Record<string, unknown> = {}
 ): Promise<T> {
   const env = getEnv();
-  const endpoint = env.NANO_RPC_ENDPOINT;
+  const endpoint = NANO_RPC_ENDPOINT;
   const body = { action, ...params, key: env.NANO_RPC_KEY };
 
   const response = await fetch(endpoint, {
