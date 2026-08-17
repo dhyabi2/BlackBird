@@ -204,7 +204,7 @@ Because Nano uses Ed25519-blake2b, the FROST implementation must use Blake2b for
 
 To maximize assurance, the implementation is built on the audited **`frost-core`** crate and the well-tested **`frost-ed25519`** reference ciphersuite, with the following minimal substitutions to target Ed25519-blake2b:
 
-| FROST internal hash | Default (SHA-512) | VELA (Blake2b) |
+| FROST internal hash | Default (SHA-512) | BLACKBIRD (Blake2b) |
 |---------------------|-------------------|----------------|
 | Randomizer derivation (`hash_randomizer`) | BLAKE2b-512 / H3 context | BLAKE2b-512 with protocol-specific context string |
 | Nonce derivation (`generate_nonce`) | BLAKE2b-512 / H3 context | BLAKE2b-512 with protocol-specific context string |
@@ -214,7 +214,7 @@ This limits the unaudited surface to the hash-function substitutions and the con
 
 - Ed25519 group operations unchanged from `frost-ed25519`.
 - SHA-512 replaced by Blake2b-512 only where the Ed25519-blake2b variant requires it.
-- Distinct context strings (e.g., `"VELA.frost-ed25519-blake2b-v1"`) to prevent cross-protocol replay.
+- Distinct context strings (e.g., `"BLACKBIRD.frost-ed25519-blake2b-v1"`) to prevent cross-protocol replay.
 
 ### Key generation and share refresh
 
@@ -315,7 +315,7 @@ This design does not require a mempool or global timestamps. It relies on guardi
 
 ## 9. Censorship Resistance
 
-VELA v2 is designed so that no single actor can permanently censor deposits or withdrawals. This section lists every censorship vector and the concrete mitigation applied to each.
+BLACKBIRD v2 is designed so that no single actor can permanently censor deposits or withdrawals. This section lists every censorship vector and the concrete mitigation applied to each.
 
 ### Deposits
 
@@ -403,13 +403,13 @@ A bond custodian set or a majority of guardians could refuse to act on a valid f
 
 ### Summary
 
-No single failure point can permanently censor VELA v2. Deposits need only Nano liveness; withdrawals need only `t` honest guardians and any working RPC path; discovery uses multiple independent channels; transport falls back through Tor and alternate protocols.
+No single failure point can permanently censor BLACKBIRD v2. Deposits need only Nano liveness; withdrawals need only `t` honest guardians and any working RPC path; discovery uses multiple independent channels; transport falls back through Tor and alternate protocols.
 
 ---
 
 ## 10. Privacy Model
 
-VELA v2 provides **unlinkability**, not transaction invisibility.
+BLACKBIRD v2 provides **unlinkability**, not transaction invisibility.
 
 ### What is hidden
 
@@ -442,7 +442,7 @@ No mechanism built on top of the current Nano protocol can hide the recipient or
 
 ## 11. Economic Security
 
-VELA v2 stays entirely on Nano. Because Nano has no smart contracts, automatic, non-custodial slashing cannot be enforced by the protocol directly. Economic security is therefore achieved through a combination of **bonded multi-sig custody**, **public fraud proofs**, **share revocation via re-sharing**, and **social/economic exclusion**.
+BLACKBIRD v2 stays entirely on Nano. Because Nano has no smart contracts, automatic, non-custodial slashing cannot be enforced by the protocol directly. Economic security is therefore achieved through a combination of **bonded multi-sig custody**, **public fraud proofs**, **share revocation via re-sharing**, and **social/economic exclusion**.
 
 ### Honest limitation
 
@@ -576,7 +576,7 @@ Key API routes:
 Configuration is via environment variables (see `web/.env.example`):
 
 - `NANO_RPC_ENDPOINT` / `NANO_RPC_KEY`
-- `VELA_BACKEND_URL` / `VELA_BACKEND_API_KEY`
+- `BLACKBIRD_BACKEND_URL` / `BLACKBIRD_BACKEND_API_KEY`
 - `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` (optional rate limiting)
 - `NEXT_PUBLIC_APP_NAME` / `NEXT_PUBLIC_APP_URL`
 
@@ -596,7 +596,7 @@ See `docs/vercel_production_readiness.md` for the full checklist.
 A detailed BPMN 2.0 model of the full protocol is available at:
 
 ```
-docs/VELA_v2_architecture.bpmn
+docs/BLACKBIRD_v2_architecture.bpmn
 ```
 
 Open it in any BPMN editor (e.g., Camunda Modeler, bpmn.io).
@@ -617,11 +617,11 @@ Each document includes ranked mechanisms, rejected ideas, and a recommended comp
 
 ## Appendix: Files and Code
 
-- `src/vela_crypto.py` — Nano addressing, Ed25519-blake2b signing, stealth addresses, Poseidon commitments and nullifiers.
+- `src/BLACKBIRD_crypto.py` — Nano addressing, Ed25519-blake2b signing, stealth addresses, Poseidon commitments and nullifiers.
 - `src/poseidon_bridge.py` — Python-to-Node bridge for Circom-compatible Poseidon hashing.
 - `src/snarkjs_bridge.py` — Python-to-Node bridge for Groth16 proof generation and verification.
-- `src/vela_indexer.py` — Indexer service.
-- `src/vela_guardian.py` — Guardian service (single-key implementation; threshold FROST in implementation phase).
-- `src/vela_client.py` — CLI client for deposits and withdrawals.
-- `circuit/vela.circom` — Groth16 withdrawal circuit.
-- `docs/VELA_v2_architecture.bpmn` — Full BPMN model.
+- `src/BLACKBIRD_indexer.py` — Indexer service.
+- `src/BLACKBIRD_guardian.py` — Guardian service (single-key implementation; threshold FROST in implementation phase).
+- `src/BLACKBIRD_client.py` — CLI client for deposits and withdrawals.
+- `circuit/BLACKBIRD.circom` — Groth16 withdrawal circuit.
+- `docs/BLACKBIRD_v2_architecture.bpmn` — Full BPMN model.
