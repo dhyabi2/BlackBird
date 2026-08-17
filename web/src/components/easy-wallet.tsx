@@ -754,9 +754,29 @@ export default function EasyWallet() {
       const required = denom + BigInt(1);
       let bal = BigInt(balance ?? "0");
 
+      // Resume detection: if the account's frontier is already a deposit to
+      // this denomination's pool, the previous attempt died before the
+      // commitment was broadcast. Skip straight to the commitment.
+      const poolDataEarly = await apiGet(`/api/pool_address/${effectiveDenom}`);
+      const poolPubHexEarly = poolDataEarly.pool_pubkey as string;
+      let resumeDepositHash: string | null = null;
+      if (sourceInfo.frontier) {
+        const blocks = (await apiPost("/api/blocks_info", { hashes: [sourceInfo.frontier] }).catch(() => null)) as
+          | Record<string, { amount?: string; contents?: { link?: string } }>
+          | null;
+        const fb = blocks?.[sourceInfo.frontier];
+        if (
+          fb?.contents?.link?.toLowerCase() === poolPubHexEarly.toLowerCase() &&
+          fb?.amount === denom.toString()
+        ) {
+          resumeDepositHash = sourceInfo.frontier;
+          log(`Found deposit ${resumeDepositHash.slice(0, 16)}... without a commitment; resuming.`);
+        }
+      }
+
       // Auto-receive pending sends if the source balance is not yet spendable.
       let currentSourceInfo = sourceInfo;
-      if (bal < required) {
+      if (!resumeDepositHash && bal < required) {
         const pendingSum = BigInt(pendingRaw ?? "0");
         if (bal + pendingSum < required) {
           throw new Error(`Send at least ${nano(fundAmountRaw)} XNO to your shield address first`);
@@ -775,8 +795,7 @@ export default function EasyWallet() {
         setSourceInfo(currentSourceInfo);
       }
 
-      const poolData = await apiGet(`/api/pool_address/${effectiveDenom}`);
-      const poolPubHex = poolData.pool_pubkey as string;
+      const poolPubHex = poolPubHexEarly;
       const S_pub = hexToBytes(poolPubHex);
 
       // A (source, withdraw key) pair maps to one nullifier forever, and each
@@ -822,44 +841,56 @@ export default function EasyWallet() {
       if (!currentSourceInfo.frontier) {
         throw new Error("DEPOSIT-FRONTIER: Source account frontier is not available after receiving.");
       }
-      // Build the block before generating its work: block hashes exclude the
-      // work value, so the commit block's work root (this deposit's hash) can
-      // start warming server-side a full work-cycle earlier.
-      const depositBlock = buildSendBlock(source.secretKey, {
-        fromAddress: source.address,
-        previous: currentSourceInfo.frontier,
-        representative: currentSourceInfo.representative || DEFAULT_REP,
-        balance: (bal - denom).toString(),
-        link: poolPubHex,
-        amount: denom.toString(),
-        work: "0000000000000000",
-      });
-      warmWork(depositBlock.hash, "send");
+      let depositHash: string;
+      let preCommitBalance: bigint;
+      if (resumeDepositHash) {
+        // Deposit already on-chain; only the commitment is missing. The
+        // current balance is already post-deposit.
+        depositHash = resumeDepositHash;
+        preCommitBalance = bal;
+        warmWork(depositHash, "send");
+      } else {
+        // Build the block before generating its work: block hashes exclude the
+        // work value, so the commit block's work root (this deposit's hash)
+        // can start warming server-side a full work-cycle earlier.
+        const depositBlock = buildSendBlock(source.secretKey, {
+          fromAddress: source.address,
+          previous: currentSourceInfo.frontier,
+          representative: currentSourceInfo.representative || DEFAULT_REP,
+          balance: (bal - denom).toString(),
+          link: poolPubHex,
+          amount: denom.toString(),
+          work: "0000000000000000",
+        });
+        warmWork(depositBlock.hash, "send");
 
-      setStatusMessage("Computing proof of work for deposit...");
-      const depositPrevious = String(depositBlock.block.previous);
-      let depositWork = await generateWorkTimed(depositPrevious, "send");
-      if (!validateWork(depositWork, depositPrevious, SEND_THRESHOLD)) {
-        log(`WARN: Deposit work invalid; retrying`);
-        depositWork = await generateWorkTimed(depositPrevious, "send");
+        setStatusMessage("Computing proof of work for deposit...");
+        const depositPrevious = String(depositBlock.block.previous);
+        let depositWork = await generateWorkTimed(depositPrevious, "send");
         if (!validateWork(depositWork, depositPrevious, SEND_THRESHOLD)) {
-          throw new Error("DEPOSIT-WORK: Generated work is invalid for deposit block");
+          log(`WARN: Deposit work invalid; retrying`);
+          depositWork = await generateWorkTimed(depositPrevious, "send");
+          if (!validateWork(depositWork, depositPrevious, SEND_THRESHOLD)) {
+            throw new Error("DEPOSIT-WORK: Generated work is invalid for deposit block");
+          }
         }
+        (depositBlock.block as Record<string, unknown>).work = depositWork;
+        log(`Deposit hash: ${depositBlock.hash}`);
+        setStatusMessage("Broadcasting deposit block...");
+        await apiPost("/api/broadcast", { block: depositBlock.block, subtype: "send" });
+        log("Deposit broadcasted");
+        depositHash = depositBlock.hash;
+        preCommitBalance = bal - denom;
       }
-      (depositBlock.block as Record<string, unknown>).work = depositWork;
-      log(`Deposit hash: ${depositBlock.hash}`);
-      setStatusMessage("Broadcasting deposit block...");
-      await apiPost("/api/broadcast", { block: depositBlock.block, subtype: "send" });
-      log("Deposit broadcasted");
 
       setStatusMessage("Computing proof of work for commitment...");
-      let commitWork = await generateWorkTimed(depositBlock.hash, "send");
+      let commitWork = await generateWorkTimed(depositHash, "send");
       setStatusMessage("Broadcasting commitment block...");
       const commitBlock = buildSendBlock(source.secretKey, {
         fromAddress: source.address,
-        previous: depositBlock.hash,
+        previous: depositHash,
         representative: currentSourceInfo.representative || DEFAULT_REP,
-        balance: (bal - denom - BigInt(1)).toString(),
+        balance: (preCommitBalance - BigInt(1)).toString(),
         link: C_hex,
         amount: "1",
         work: commitWork,
@@ -878,14 +909,14 @@ export default function EasyWallet() {
       log("Commitment broadcasted");
 
       setStatusMessage("Waiting for deposit/commit confirmation...");
-      const confirmed = await waitForConfirmation([depositBlock.hash, commitBlock.hash]);
+      const confirmed = await waitForConfirmation([depositHash, commitBlock.hash]);
       if (!confirmed) {
         throw new Error("DEPOSIT-CONFIRM: Deposit/commit blocks were not confirmed in time.");
       }
 
-      await submitDepositWithRetry(depositBlock.hash, commitBlock.hash, setStatusMessage);
+      await submitDepositWithRetry(depositHash, commitBlock.hash, setStatusMessage);
       log("Indexer accepted deposit.");
-      setDepositTx({ depositHash: depositBlock.hash, commitHash: commitBlock.hash });
+      setDepositTx({ depositHash, commitHash: commitBlock.hash });
       setDepositDone(true);
       setStatusMessage("Waiting for your shield to be indexed...");
       startDepositStatusPolling(C_hex);
