@@ -9,6 +9,7 @@ import {
   buildReceiveBlock,
   rawToNano,
   nanoToRaw,
+  validateWork,
 } from "@/lib/wallet";
 import { encryptSeed, decryptSeed } from "@/lib/crypto-storage";
 import { createBackupPhrase, phraseToSeedHex } from "@/lib/mnemonic";
@@ -431,20 +432,34 @@ export default function EasyWallet() {
     const representative = rep || DEFAULT_REP;
 
     const isOpen = !sourceInfo.frontier;
-    const workHash = workHashForReceive(isOpen ? ZERO_HASH : sourceInfo.frontier!, source.publicKey);
-    const work = await generateWork(workHash, "receive");
+    const previous = isOpen ? ZERO_HASH : sourceInfo.frontier!;
+    const workHash = workHashForReceive(previous, source.publicKey);
+    let work = await generateWork(workHash, "receive");
     const newBalance = (currentBalance + chosenAmount).toString();
 
     const receiveBlock = buildReceiveBlock(source.secretKey, {
       toAddress: source.address,
-      previous: isOpen ? ZERO_HASH : sourceInfo.frontier!,
+      previous,
       representative,
       transactionHash: chosenHash,
       balance: currentBalance.toString(),
       amount: chosenAmount.toString(),
       work,
     });
+
+    // Validate the work against the actual block hash before broadcasting.
+    const blockPrevious = String(receiveBlock.block.previous);
+    if (!validateWork(work, blockPrevious, RECEIVE_THRESHOLD)) {
+      log(`WARN: Work invalid for block previous; retrying work generation`);
+      work = await generateWork(blockPrevious, "receive");
+      (receiveBlock.block as Record<string, unknown>).work = work;
+      if (!validateWork(work, blockPrevious, RECEIVE_THRESHOLD)) {
+        throw new Error("RECEIVE-WORK: Generated work is invalid for receive block");
+      }
+    }
+
     log(`Receive hash: ${receiveBlock.hash}`);
+    log(`Receive work hash: ${workHash}, block previous: ${blockPrevious}, isOpen: ${isOpen}`);
     await apiPost("/api/broadcast", { block: receiveBlock.block, subtype: "receive" });
     log("Receive broadcasted");
 
@@ -496,7 +511,7 @@ export default function EasyWallet() {
         throw new Error("DEPOSIT-FRONTIER: Source account frontier is not available after receiving.");
       }
       setStatusMessage("Computing proof of work for deposit...");
-      const depositWork = await generateWork(currentSourceInfo.frontier, "send");
+      let depositWork = await generateWork(currentSourceInfo.frontier, "send");
       setStatusMessage("Broadcasting deposit block...");
       const depositBlock = buildSendBlock(source.secretKey, {
         fromAddress: source.address,
@@ -507,12 +522,21 @@ export default function EasyWallet() {
         amount: denom.toString(),
         work: depositWork,
       });
+      const depositPrevious = String(depositBlock.block.previous);
+      if (!validateWork(depositWork, depositPrevious, SEND_THRESHOLD)) {
+        log(`WARN: Deposit work invalid; retrying`);
+        depositWork = await generateWork(depositPrevious, "send");
+        (depositBlock.block as Record<string, unknown>).work = depositWork;
+        if (!validateWork(depositWork, depositPrevious, SEND_THRESHOLD)) {
+          throw new Error("DEPOSIT-WORK: Generated work is invalid for deposit block");
+        }
+      }
       log(`Deposit hash: ${depositBlock.hash}`);
       await apiPost("/api/broadcast", { block: depositBlock.block, subtype: "send" });
       log("Deposit broadcasted");
 
       setStatusMessage("Computing proof of work for commitment...");
-      const commitWork = await generateWork(depositBlock.hash, "send");
+      let commitWork = await generateWork(depositBlock.hash, "send");
       setStatusMessage("Broadcasting commitment block...");
       const commitBlock = buildSendBlock(source.secretKey, {
         fromAddress: source.address,
@@ -523,6 +547,15 @@ export default function EasyWallet() {
         amount: "1",
         work: commitWork,
       });
+      const commitPrevious = String(commitBlock.block.previous);
+      if (!validateWork(commitWork, commitPrevious, SEND_THRESHOLD)) {
+        log(`WARN: Commitment work invalid; retrying`);
+        commitWork = await generateWork(commitPrevious, "send");
+        (commitBlock.block as Record<string, unknown>).work = commitWork;
+        if (!validateWork(commitWork, commitPrevious, SEND_THRESHOLD)) {
+          throw new Error("COMMIT-WORK: Generated work is invalid for commitment block");
+        }
+      }
       log(`Commit hash: ${commitBlock.hash}`);
       await apiPost("/api/broadcast", { block: commitBlock.block, subtype: "send" });
       log("Commitment broadcasted");
@@ -607,8 +640,17 @@ export default function EasyWallet() {
       // PoW must be computed on the pool frontier (the block's previous field), not the block hash.
       const workHash = typeof withdrawRes.block.previous === "string" ? withdrawRes.block.previous : withdrawRes.block_hash;
       setStatusMessage("Computing proof of work...");
-      const work = await generateWork(workHash, "send");
+      let work = await generateWork(workHash, "send");
       const signedBlock = { ...withdrawRes.block, work };
+      const blockPrevious = String(signedBlock.previous);
+      if (!validateWork(work, blockPrevious, SEND_THRESHOLD)) {
+        log(`WARN: Withdraw work invalid; retrying`);
+        work = await generateWork(blockPrevious, "send");
+        signedBlock.work = work;
+        if (!validateWork(work, blockPrevious, SEND_THRESHOLD)) {
+          throw new Error("WITHDRAW-WORK: Generated work is invalid for withdraw block");
+        }
+      }
       const broadcastRes = (await apiPost("/api/broadcast_withdrawal", {
         nullifier: nullifier.toString(16),
         block: signedBlock,
