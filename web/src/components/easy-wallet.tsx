@@ -404,10 +404,22 @@ export default function EasyWallet() {
             setDenomRaw(String(denom));
             setDenomManuallyChanged(true);
             setResumeReady(true);
-            setStatusMessage(
-              `Found an unfinished ${nano(BigInt(denom))} XNO shield — press "Shield now" to complete it.`
-            );
-            log(`Unfinished ${nano(BigInt(denom))} XNO shield detected (deposit without commitment).`);
+            const hasCommitDust = BigInt(balance ?? "0") >= BigInt(1);
+            if (hasCommitDust) {
+              setStatusMessage(
+                `Unfinished ${nano(BigInt(denom))} XNO shield found. No extra funds needed — press "Shield now" to complete it.`
+              );
+              log(
+                `Unfinished ${nano(BigInt(denom))} XNO shield detected. Press "Shield now" to finish it (no extra funds needed).`
+              );
+            } else {
+              setStatusMessage(
+                `Unfinished ${nano(BigInt(denom))} XNO shield found, but the shield address has no balance left for the commitment. Do NOT send more funds here — contact support for manual recovery.`
+              );
+              log(
+                `Unfinished ${nano(BigInt(denom))} XNO shield detected, but no balance remains for the commitment. Manual recovery required — do not send more funds to this address.`
+              );
+            }
             return;
           }
         }
@@ -874,7 +886,14 @@ export default function EasyWallet() {
       let preCommitBalance: bigint;
       if (resumeDepositHash) {
         // Deposit already on-chain; only the commitment is missing. The
-        // current balance is already post-deposit.
+        // current balance is already post-deposit. The commitment must chain
+        // directly from the deposit block, so receiving new funds here would
+        // invalidate the pair — never auto-receive in this path.
+        if (bal < BigInt(1)) {
+          throw new Error(
+            "COMMIT-FUND: No balance left for the 1-raw commitment. Do not send more funds to this address (a new receive would break the deposit chain) — manual recovery is required."
+          );
+        }
         depositHash = resumeDepositHash;
         preCommitBalance = bal;
         warmWork(depositHash, "send");
