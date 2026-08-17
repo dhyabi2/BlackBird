@@ -43,40 +43,32 @@ async function generateWork(hash: string, subtype: "send" | "receive"): Promise<
   }
   const difficulty = subtype === "send" ? SEND_THRESHOLD : RECEIVE_THRESHOLD;
 
-  // Race the server work service (pre-warmed cache / on-demand compute)
-  // against device generation (WebGPU/WebGL2/WASM in a worker). Whichever
-  // produces valid work first wins — a warm server cache returns in <1s,
-  // while a cold cache lets a fast GPU finish long before the server.
-  const DEADLINE_MS = 180_000;
-
-  const serverAttempt = (async (): Promise<string | null> => {
-    const deadline = Date.now() + DEADLINE_MS;
-    while (Date.now() < deadline) {
-      try {
-        const res = await apiPost("/api/work", { hash, difficulty });
-        if (res.work && validateWork(res.work, hash, difficulty)) return res.work;
-      } catch {
-        // Not ready yet — the request also queued background computation.
+  // Server-first policy: all proof-of-work comes from the server work chain
+  // (VPS cache/queue, rpc.nano.to, public pool). The device generates only as
+  // an emergency fallback when the server endpoint itself is failing —
+  // "not ready yet" responses keep polling, they do not trigger device work.
+  const DEADLINE_MS = 240_000;
+  const deadline = Date.now() + DEADLINE_MS;
+  let consecutiveFailures = 0;
+  while (Date.now() < deadline) {
+    try {
+      const res = await apiPost("/api/work", { hash, difficulty });
+      if (res.work && validateWork(res.work, hash, difficulty)) return res.work;
+      consecutiveFailures = 0;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/computed in the background|work not ready/i.test(msg)) {
+        consecutiveFailures = 0; // normal "still computing" response
+      } else if (++consecutiveFailures >= 3) {
+        break; // server endpoint genuinely unreachable — use the device
       }
-      await new Promise((r) => setTimeout(r, 4000));
     }
-    return null;
-  })();
+    await new Promise((r) => setTimeout(r, 4000));
+  }
 
-  const deviceAttempt = generateLocalWork(hash, difficulty, DEADLINE_MS);
-
-  const work = await new Promise<string | null>((resolve) => {
-    let unresolved = 2;
-    const settle = (w: string | null) => {
-      if (w) resolve(w);
-      else if (--unresolved === 0) resolve(null);
-    };
-    serverAttempt.then(settle, () => settle(null));
-    deviceAttempt.then(settle, () => settle(null));
-  });
-
-  if (!work) throw new Error("Work generation failed on both server and device");
-  return work;
+  const local = await generateLocalWork(hash, difficulty, 180_000);
+  if (local) return local;
+  throw new Error("Work generation failed on both server and device");
 }
 
 const DENOMINATIONS = [
@@ -490,11 +482,9 @@ export default function EasyWallet() {
   function warmWork(hash: string | null | undefined, subtype: "send" | "receive") {
     if (!hash || !/^[0-9a-fA-F]{64}$/.test(hash)) return;
     const difficulty = subtype === "send" ? SEND_THRESHOLD : RECEIVE_THRESHOLD;
-    // Queue the server's work generator too — with enough head start (roots
-    // are known long before their work is needed) the server usually wins the
-    // race and the device never computes at all.
+    // Server-only warm-up: roots are known long before their work is needed,
+    // so the server generator gets the head start. No device compute here.
     void apiPost("/api/work_warm", { hash, difficulty }).catch(() => {});
-    void generateLocalWork(hash, difficulty, 300_000);
   }
 
   // Proof-of-work can take from seconds (GPU) to minutes (WASM). Show a live
@@ -505,7 +495,7 @@ export default function EasyWallet() {
     setStatusMessage(`${label}... 0s`);
     const id = setInterval(() => {
       const s = Math.floor((Date.now() - start) / 1000);
-      setStatusMessage(`${label}... ${s}s${s >= 45 ? " — still working, GPU may be slow on this device" : ""}`);
+      setStatusMessage(`${label}... ${s}s${s >= 45 ? " — the server is still computing, please keep the page open" : ""}`);
     }, 1000);
     try {
       const work = await generateWork(hash, subtype);
