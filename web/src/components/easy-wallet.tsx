@@ -999,7 +999,7 @@ export default function EasyWallet() {
     const isActive = activeStep === step;
     const isCompleted = completedStep >= step;
     return [
-      "flex items-start gap-4 rounded-xl border bg-white p-5 transition-opacity",
+      "flex items-start gap-3 rounded-xl border bg-white p-4 transition-opacity sm:gap-4 sm:p-5",
       isActive || isCompleted ? "border-black/20" : "border-black/10 opacity-60",
     ].join(" ");
   }
@@ -1139,7 +1139,7 @@ export default function EasyWallet() {
       <div className="mt-6 space-y-4">
         <div className={stepClasses(1)}>
           <div className={stepNumClasses(1)}>1</div>
-          <div className="flex-1">
+          <div className="min-w-0 flex-1">
             <h2 className="font-semibold">Fund your shield address</h2>
             <p className="text-sm text-black/50">
               Send exactly <HighlightedAmount amount={depositAmountText} /> to this temporary address.
@@ -1151,7 +1151,7 @@ export default function EasyWallet() {
             {greenlight?.ok && source && (
               <div className="mt-4">
                 <div className="flex items-center gap-2">
-                  <code className="break-all rounded-lg border border-black/10 bg-black/5 px-3 py-2 text-xs font-mono">{source.address}</code>
+                  <code className="min-w-0 flex-1 break-all rounded-lg border border-black/10 bg-black/5 px-3 py-2 font-mono text-xs">{source.address}</code>
                   <CopyButton text={source.address} />
                 </div>
                 <div className="mt-4 inline-block rounded-lg border border-black/10 bg-white p-4">
@@ -1174,7 +1174,7 @@ export default function EasyWallet() {
 
         <div className={stepClasses(2)}>
           <div className={stepNumClasses(2)}>2</div>
-          <div className="flex-1">
+          <div className="min-w-0 flex-1">
             <h2 className="font-semibold">Shield into the pool</h2>
             <p className="text-sm text-black/50">Move {nano(BigInt(effectiveDenom))} XNO + 1 raw into the privacy pool.</p>
             {hasPending && !depositDone && (
@@ -1201,7 +1201,7 @@ export default function EasyWallet() {
         {logs.length > 0 && (
           <div className="rounded-xl border border-black/10 bg-black/5 p-5">
             <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-black/70">Activity log</h2>
-            <pre className="max-h-64 overflow-auto font-mono text-xs text-black/70">
+            <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-all font-mono text-xs text-black/70">
               {[...logs].reverse().join("\n")}
             </pre>
           </div>
@@ -1209,7 +1209,7 @@ export default function EasyWallet() {
 
         <div className={stepClasses(3)}>
           <div className={stepNumClasses(3)}>3</div>
-          <div className="flex-1">
+          <div className="min-w-0 flex-1">
             <h2 className="font-semibold">Send to a fresh address</h2>
             <p className="text-sm text-black/50">
               Recipient receives {nano(BigInt(effectiveDenom) - withdrawFeeRaw(BigInt(effectiveDenom), feeBps))} XNO
@@ -1231,7 +1231,7 @@ export default function EasyWallet() {
             )}
             {lastWithdrawAddress && (
               <p className="mt-3 text-sm text-black/70">
-                Last withdrawal: <span className="font-mono">{lastWithdrawAddress}</span>
+                Last withdrawal: <span className="break-all font-mono">{lastWithdrawAddress}</span>
               </p>
             )}
           </div>

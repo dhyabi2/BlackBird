@@ -6,6 +6,7 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import { getClientIp } from "@/lib/ip";
 import { validateWork } from "@/lib/work";
 import { getServerWork } from "@/lib/server-work";
+import { getPublicWork } from "@/lib/public-work";
 import { z } from "zod";
 
 export const maxDuration = 60;
@@ -35,16 +36,35 @@ export async function POST(request: NextRequest) {
       return { work: serverWork, source: "server" };
     }
 
-    // 2. rpc.nano.to, validated locally (its work service has a history of
-    //    returning invalid nonces).
-    const rpcResult = (await nanoRpcCall("work_generate", {
+    // 2. rpc.nano.to and the public work endpoints, all in parallel, each
+    //    validated locally — first valid result wins. rpc.nano.to has a
+    //    history of returning invalid nonces and the public endpoints are
+    //    flaky, so validation is what makes them safe to use at all.
+    const primaryAttempt = nanoRpcCall("work_generate", {
       hash: parsed.data.hash,
       difficulty: threshold,
-    }).catch(() => ({}))) as { work?: string };
+    })
+      .then((r) => {
+        const work = (r as { work?: string }).work;
+        return work && validateWork(work, parsed.data.hash, threshold)
+          ? { work, source: "rpc.nano.to" }
+          : null;
+      })
+      .catch(() => null);
 
-    if (rpcResult.work && validateWork(rpcResult.work, parsed.data.hash, threshold)) {
-      return { work: rpcResult.work, source: "rpc" };
-    }
+    const publicAttempt = getPublicWork(parsed.data.hash, threshold);
+
+    const remote = await new Promise<{ work: string; source: string } | null>((resolve) => {
+      let unresolved = 2;
+      const settle = (r: { work: string; source: string } | null) => {
+        if (r) resolve(r);
+        else if (--unresolved === 0) resolve(null);
+      };
+      primaryAttempt.then(settle);
+      publicAttempt.then(settle, () => settle(null));
+    });
+
+    if (remote) return remote;
 
     throw new ApiError(
       502,
