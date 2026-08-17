@@ -316,6 +316,46 @@ export default function EasyWallet() {
     return recommendDenomination(balance, pendingRaw);
   }, [denomManuallyChanged, busy, depositDone, denomRaw, balance, pendingRaw]);
 
+  // Recover shield state after a page reload: if this wallet's commitment is
+  // already indexed and its nullifier is unspent, withdrawing is possible
+  // right away — the in-memory depositDone/withdrawReady flags don't survive
+  // a refresh.
+  useEffect(() => {
+    if (!seed || !withdraw || withdrawReady || busy) return;
+    let alive = true;
+    (async () => {
+      try {
+        const poolData = await apiGet(`/api/pool_address/${effectiveDenom}`);
+        const S_pub = hexToBytes(poolData.pool_pubkey as string);
+        const P_w = hexToBytes(withdraw.publicKey);
+        const n = deriveSecretBytes(seed, withdraw.publicKey, "vela/n");
+        const t = deriveSecretBytes(seed, withdraw.publicKey, "vela/t");
+        const C_hex = computeCommitment(n, t, P_w, S_pub).toString(16).padStart(64, "0");
+        const status = (await apiGet(`/api/deposit_status?commitment=${C_hex}`)) as {
+          indexed?: boolean;
+          epoch?: number;
+        };
+        if (!alive || !status.indexed) return;
+        const nullifier = computeNullifier(n);
+        const nullStatus = await apiGet(
+          `/api/nullifier_status?nullifier=${nullifier.toString(16)}`
+        ).catch(() => null);
+        if (!alive || nullStatus?.spent) return;
+        if (typeof status.epoch === "number") setEpoch(status.epoch);
+        setDepositDone(true);
+        setWithdrawReady(true);
+        setStatusMessage("Existing shield found. You can send privately now.");
+        log("Recovered existing shield from indexer.");
+      } catch {
+        // Recovery is best-effort; the normal deposit flow still works.
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed, withdraw, effectiveDenom, withdrawReady, busy]);
+
   function log(msg: string) {
     setLogs((prev) => [...prev, `${new Date().toLocaleTimeString()} ${msg}`]);
   }
@@ -525,6 +565,22 @@ export default function EasyWallet() {
         throw new Error(
           `This shield/withdraw pair was already used (nullifier spent). Switch to a fresh withdraw account (index ${withdrawIndex + 1}) before depositing.`
         );
+      }
+
+      // If this commitment is already indexed, a second identical deposit
+      // would be deduplicated and its funds unrecoverable — skip straight to
+      // the withdraw step instead.
+      const existing = (await apiGet(`/api/deposit_status?commitment=${C_hex}`).catch(() => null)) as {
+        indexed?: boolean;
+        epoch?: number;
+      } | null;
+      if (existing?.indexed) {
+        log("Shield already indexed for this wallet; skipping duplicate deposit.");
+        if (typeof existing.epoch === "number") setEpoch(existing.epoch);
+        setDepositDone(true);
+        setWithdrawReady(true);
+        setStatusMessage("Shield already active. You can send now.");
+        return;
       }
 
       if (!currentSourceInfo.frontier) {

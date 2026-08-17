@@ -142,6 +142,18 @@ class VelaIndexer:
             "indices": indices,
         }
 
+    def leaf_index(self, epoch: int, denomination: int, C: int) -> Optional[int]:
+        key = (epoch, denomination)
+        with self.lock:
+            if key not in self.trees:
+                if key not in self.commitments:
+                    return None
+                self._rebuild_tree(key)
+            try:
+                return self.trees[key].leaf_index(C)
+            except KeyError:
+                return None
+
     def mark_nullifier(self, N: int):
         with self.lock:
             self.nullifiers.add(N)
@@ -297,7 +309,7 @@ def create_app(indexer: VelaIndexer) -> Flask:
             "epoch": epoch,
             "denomination": denomination,
             "root": hex(root) if root else None,
-            "leaf_index": indexer.leaf_index(C),
+            "leaf_index": indexer.leaf_index(epoch, denomination, C),
         })
 
     @app.route("/api/nullifier/<nullifier_hex>")
