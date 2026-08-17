@@ -596,7 +596,7 @@ See `docs/vercel_production_readiness.md` for the full checklist.
 A detailed BPMN 2.0 model of the full protocol is available at:
 
 ```
-docs/BLACKBIRD_v2_architecture.bpmn
+docs/VELA_v2_architecture.bpmn
 ```
 
 Open it in any BPMN editor (e.g., Camunda Modeler, bpmn.io).
@@ -615,13 +615,3 @@ Each document includes ranked mechanisms, rejected ideas, and a recommended comp
 
 ---
 
-## Appendix: Files and Code
-
-- `src/BLACKBIRD_crypto.py` — Nano addressing, Ed25519-blake2b signing, stealth addresses, Poseidon commitments and nullifiers.
-- `src/poseidon_bridge.py` — Python-to-Node bridge for Circom-compatible Poseidon hashing.
-- `src/snarkjs_bridge.py` — Python-to-Node bridge for Groth16 proof generation and verification.
-- `src/BLACKBIRD_indexer.py` — Indexer service.
-- `src/BLACKBIRD_guardian.py` — Guardian service (single-key implementation; threshold FROST in implementation phase).
-- `src/BLACKBIRD_client.py` — CLI client for deposits and withdrawals.
-- `circuit/BLACKBIRD.circom` — Groth16 withdrawal circuit.
-- `docs/BLACKBIRD_v2_architecture.bpmn` — Full BPMN model.
