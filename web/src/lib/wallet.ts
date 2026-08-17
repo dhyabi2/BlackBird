@@ -116,6 +116,11 @@ export function buildSendBlock(
   }
 ): NanoBlock {
   const previousBalance = (BigInt(data.balance) + BigInt(data.amount)).toString();
+  if (BigInt(previousBalance) < BigInt(data.amount)) {
+    throw new Error(
+      `Insufficient balance for send: walletBalanceRaw=${previousBalance} amount=${data.amount}`
+    );
+  }
   const signed = block.send(
     {
       walletBalanceRaw: previousBalance,

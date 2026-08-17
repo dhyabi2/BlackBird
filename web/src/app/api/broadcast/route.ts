@@ -40,7 +40,8 @@ export async function POST(request: NextRequest) {
     const parsed = broadcastSchema.safeParse(body);
     if (!parsed.success) {
       const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
-      throw new ApiError(400, `Broadcast block validation failed: ${issues}`);
+      const balanceValue = typeof body?.block?.balance === "string" ? body.block.balance : JSON.stringify(body?.block?.balance);
+      throw new ApiError(400, `Broadcast block validation failed: ${issues} (received balance=${balanceValue})`);
     }
 
     const limit = await checkRateLimit(`broadcast:${getClientIp(request)}`);
