@@ -10,6 +10,7 @@ import {
   buildSendBlock,
   buildReceiveBlock,
   fetchAccountHistory,
+  publicKeyToAddress,
   workHashForReceive,
   rawToNano,
   nanoToRaw,
@@ -44,6 +45,17 @@ async function apiPost(path, body) {
 
 async function generateWork(hash, subtype = "send") {
   const difficulty = subtype === "send" ? SEND_THRESHOLD : RECEIVE_THRESHOLD;
+  // Optional local work provider (e.g. GPU work bridge) via WORK_URL env var.
+  if (process.env.WORK_URL) {
+    const res = await fetch(process.env.WORK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hash, difficulty }),
+    });
+    const data = await res.json();
+    if (res.ok && data.work) return data.work;
+    console.warn("WORK_URL failed, falling back to /api/work:", data.error || res.status);
+  }
   const res = await apiPost("/api/work", { hash, difficulty });
   if (!res.work) throw new Error("Work generator did not return work");
   return res.work;
@@ -75,19 +87,18 @@ function isHex64(s) {
 }
 
 async function findDepositCommitHashes(sourceAddress, poolPubkeyHex) {
-  const history = await fetchAccountHistory(sourceAddress, { count: 100, raw: true });
-  const poolLower = poolPubkeyHex.toLowerCase();
+  // rpc.nano.to account_history omits subtype/link even with raw:true, so
+  // match the deposit by destination account (the pool address) instead.
+  const history = await fetchAccountHistory(sourceAddress, { count: 100 });
+  const poolAddress = publicKeyToAddress(poolPubkeyHex.toUpperCase());
   for (let i = 0; i < history.length; i++) {
     const h = history[i];
-    if (h.subtype !== "send") continue;
-    const link = String(h.link || "").toLowerCase();
-    if (link === poolLower) {
-      // Commitment block is the next (newer) entry.
-      if (i === 0) continue;
-      const commit = history[i - 1];
-      if (commit.subtype === "send" && isHex64(commit.link || "")) {
-        return { depositHash: h.hash, commitHash: commit.hash };
-      }
+    if (h.type !== "send" || h.account !== poolAddress) continue;
+    // Commitment block is the next (newer) entry.
+    if (i === 0) continue;
+    const commit = history[i - 1];
+    if (commit.type === "send") {
+      return { depositHash: h.hash, commitHash: commit.hash };
     }
   }
   return null;
@@ -402,6 +413,15 @@ async function runVelaCycleForWallet(sourceWallet, withdrawWallet, resume = fals
   const C_hex = C.toString(16).padStart(64, "0");
   const nullifier = computeNullifier(n);
 
+  // A (source, withdraw key) pair maps to one nullifier forever. Depositing
+  // into a spent nullifier locks the funds, so refuse before broadcasting.
+  const nullStatus = await apiGet(`/api/nullifier_status?nullifier=${nullifier.toString(16)}`).catch(() => null);
+  if (nullStatus?.spent) {
+    throw new Error(
+      `Nullifier already spent for this source/withdraw pair. Use a different withdraw index (e.g. vela ${process.argv[3] ?? 0} <fresh-index>).`
+    );
+  }
+
   let depositHash;
   let commitHash;
 
@@ -498,14 +518,18 @@ async function runVelaCycleForWallet(sourceWallet, withdrawWallet, resume = fals
   console.log(`  withdrawal broadcasted to ${withdrawWallet.address}`);
 }
 
-async function cmdVela(indexStr) {
+async function cmdVela(indexStr, withdrawIndexStr) {
   const index = Number(indexStr);
   if (Number.isNaN(index) || index < 0 || index > 9) {
     throw new Error("Provide a wallet index 0-9");
   }
+  const withdrawIndex = withdrawIndexStr ? Number(withdrawIndexStr) : 1;
+  if (Number.isNaN(withdrawIndex) || withdrawIndex < 1) {
+    throw new Error("Withdraw index must be >= 1");
+  }
   const { receivers } = loadWallets();
   const sourceWallet = receivers[index];
-  const withdrawWallet = generateWallet(sourceWallet.seed, 1);
+  const withdrawWallet = generateWallet(sourceWallet.seed, withdrawIndex);
   console.log(`VELA cycle for wallet ${index}:`);
   console.log(`  source: ${sourceWallet.address}`);
   console.log(`  withdraw: ${withdrawWallet.address}`);
@@ -689,7 +713,7 @@ async function main() {
       await cmdStatus();
       break;
     case "vela":
-      await cmdVela(process.argv[3]);
+      await cmdVela(process.argv[3], process.argv[4]);
       break;
     case "vela-all":
       await cmdVelaAll();

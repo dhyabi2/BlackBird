@@ -300,6 +300,19 @@ def create_app(indexer: VelaIndexer) -> Flask:
             "leaf_index": indexer.leaf_index(C),
         })
 
+    @app.route("/api/nullifier/<nullifier_hex>")
+    @require_api_key
+    def api_nullifier_status(nullifier_hex):
+        headers = {"X-VELA-API-Key": _GUARDIAN_API_KEY} if _GUARDIAN_API_KEY else {}
+        resp = requests.get(f"{GUARDIAN_URL}/nullifier/{nullifier_hex}", headers=headers, timeout=10)
+        try:
+            body = resp.json()
+        except Exception:
+            body = {"error": resp.text}
+        if not resp.ok:
+            return jsonify(body), resp.status_code
+        return jsonify(body)
+
     @app.route("/api/withdraw", methods=["POST"])
     @require_api_key
     def api_withdraw():

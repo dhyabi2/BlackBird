@@ -1,5 +1,6 @@
 import { wallet, block, tools } from "nanocurrency-web";
 import { blake2b } from "blakejs";
+export { validateWork } from "./work";
 
 export type NanoBlock = {
   hash: string;
@@ -194,14 +195,3 @@ export function nanoToRaw(nano: string): string {
   return tools.convert(nano, "NANO", "RAW");
 }
 
-export function validateWork(work: string, hash: string, threshold: string): boolean {
-  // Nano work validation: BLAKE2b-8(work_bytes || hash_bytes) <= threshold
-  const workBytes = hexToBytes(work);
-  const hashBytes = hexToBytes(hash);
-  const input = new Uint8Array(workBytes.length + hashBytes.length);
-  input.set(workBytes, 0);
-  input.set(hashBytes, workBytes.length);
-  const result = blake2b(input, undefined, 8);
-  const resultHex = bytesToHex(result).toLowerCase();
-  return BigInt("0x" + resultHex) <= BigInt("0x" + threshold.toLowerCase());
-}

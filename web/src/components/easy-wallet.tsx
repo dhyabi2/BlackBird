@@ -14,6 +14,7 @@ import {
 import { encryptSeed, decryptSeed } from "@/lib/crypto-storage";
 import { createBackupPhrase, phraseToSeedHex } from "@/lib/mnemonic";
 import { computeCommitment, computeNullifier, hexToBytes, bytesToHex } from "@/lib/vela-crypto";
+import { generateLocalWork } from "@/lib/client-work";
 import { blake2b } from "blakejs";
 
 import { Button } from "@/components/ui/Button";
@@ -39,6 +40,13 @@ async function generateWork(hash: string, subtype: "send" | "receive"): Promise<
     throw new Error(`DEPOSIT-WORK: Invalid work hash (${typeof hash})`);
   }
   const difficulty = subtype === "send" ? SEND_THRESHOLD : RECEIVE_THRESHOLD;
+
+  // Primary path: generate work in the browser (WebGPU/WebGL2/WASM). This
+  // avoids depending on remote work services that may return invalid work.
+  const local = await generateLocalWork(hash, difficulty);
+  if (local) return local;
+
+  // Fallback: server-side work API (rpc.nano.to), validated server-side.
   const res = await apiPost("/api/work", { hash, difficulty });
   if (!res.work || !/^[0-9a-fA-F]{16}$/.test(res.work)) {
     throw new Error("Work generator returned an invalid work value");
@@ -447,19 +455,18 @@ export default function EasyWallet() {
       work,
     });
 
-    // Validate the work against the actual block hash before broadcasting.
-    const blockPrevious = String(receiveBlock.block.previous);
-    if (!validateWork(work, blockPrevious, RECEIVE_THRESHOLD)) {
-      log(`WARN: Work invalid for block previous; retrying work generation`);
-      work = await generateWork(blockPrevious, "receive");
+    // Validate the work against the root used for generation (public key for open blocks, previous otherwise).
+    if (!validateWork(work, workHash, RECEIVE_THRESHOLD)) {
+      log(`WARN: Work invalid for receive root; retrying work generation`);
+      work = await generateWork(workHash, "receive");
       (receiveBlock.block as Record<string, unknown>).work = work;
-      if (!validateWork(work, blockPrevious, RECEIVE_THRESHOLD)) {
+      if (!validateWork(work, workHash, RECEIVE_THRESHOLD)) {
         throw new Error("RECEIVE-WORK: Generated work is invalid for receive block");
       }
     }
 
     log(`Receive hash: ${receiveBlock.hash}`);
-    log(`Receive work hash: ${workHash}, block previous: ${blockPrevious}, isOpen: ${isOpen}`);
+    log(`Receive work hash: ${workHash}, block previous: ${previous}, isOpen: ${isOpen}`);
     await apiPost("/api/broadcast", { block: receiveBlock.block, subtype: "receive" });
     log("Receive broadcasted");
 
@@ -506,6 +513,19 @@ export default function EasyWallet() {
       const C = computeCommitment(n, t, P_w, S_pub);
       const C_hex = C.toString(16).padStart(64, "0");
       log(`Commitment: ${C_hex.slice(0, 16)}...`);
+
+      // A (source, withdraw key) pair maps to one nullifier forever. If it was
+      // already spent, a new deposit could never be withdrawn — refuse now,
+      // before any funds move.
+      const nullifierCheck = computeNullifier(n);
+      const nullStatus = await apiGet(
+        `/api/nullifier_status?nullifier=${nullifierCheck.toString(16)}`
+      ).catch(() => null);
+      if (nullStatus?.spent) {
+        throw new Error(
+          `This shield/withdraw pair was already used (nullifier spent). Switch to a fresh withdraw account (index ${withdrawIndex + 1}) before depositing.`
+        );
+      }
 
       if (!currentSourceInfo.frontier) {
         throw new Error("DEPOSIT-FRONTIER: Source account frontier is not available after receiving.");

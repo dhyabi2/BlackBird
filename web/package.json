@@ -14,6 +14,7 @@
     "bip39": "^3.1.0",
     "blakejs": "^1.2.1",
     "buffer": "^6.0.3",
+    "nano-pow": "^5.2.4",
     "nanocurrency-web": "^2.0.0",
     "next": "16.3.1",
     "poseidon-lite": "^0.3.0",

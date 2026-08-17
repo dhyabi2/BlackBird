@@ -106,6 +106,94 @@ class VelaGuardian:
                 pass
             raise
 
+    RECEIVE_THRESHOLD = 0xFFFFFE0000000000
+    ZERO_32 = b"\x00" * 32
+
+    def _generate_receive_work(self, root: bytes) -> str:
+        """CPU proof-of-work at the receive threshold (~10-60s).
+
+        Returns the 16-char big-endian hex work value; the hash input uses the
+        little-endian byte order per the Nano protocol.
+        """
+        import hashlib
+
+        value = int.from_bytes(secrets.token_bytes(8), "little")
+        while True:
+            wb = value.to_bytes(8, "little")
+            digest = hashlib.blake2b(wb + root, digest_size=8).digest()
+            if int.from_bytes(digest, "little") >= self.RECEIVE_THRESHOLD:
+                return value.to_bytes(8, "big").hex()
+            value = (value + 1) & 0xFFFFFFFFFFFFFFFF
+
+    def receive_pool_pending(self, denomination: int, max_blocks: int = 20) -> int:
+        """Receive pending sends into the pool account for a denomination.
+
+        Deposits arrive as receivable blocks; the pool account must receive
+        them before the guardian can sign withdrawals. Returns the number of
+        receive blocks broadcast.
+        """
+        pool_sk, pool_pub = pool_keypair(denomination, self.seed)
+        addr = pool_address(denomination, self.seed)
+
+        pending = self.rpc.call("receivable", {"account": addr, "count": str(max_blocks), "source": "true"})
+        blocks = pending.get("blocks") or {}
+        if not blocks:
+            return 0
+
+        info = self._get_account_info(addr)
+        if info.get("error") == "Account not found":
+            previous = self.ZERO_32
+            balance = 0
+            rep_addr = addr
+            rep_pub = pool_pub
+        elif "error" in info:
+            print("pool receive: account_info error:", info["error"])
+            return 0
+        else:
+            previous = bytes.fromhex(info["frontier"])
+            balance = int(info["balance"])
+            rep_addr = info["representative"]
+            rep_pub = nano_pubkey_from_address(rep_addr)
+
+        received = 0
+        for send_hash, meta in blocks.items():
+            amount = int(meta["amount"] if isinstance(meta, dict) else meta)
+            new_balance = balance + amount
+            link = bytes.fromhex(send_hash)
+            block_hash = nano_state_block_hash(pool_pub, previous, rep_pub, new_balance, link)
+            signature = sign_message(pool_sk, block_hash)
+            work_root = pool_pub if previous == self.ZERO_32 else previous
+            work = self._generate_receive_work(work_root)
+            block = {
+                "type": "state",
+                "account": addr,
+                "previous": previous.hex(),
+                "representative": rep_addr,
+                "balance": str(new_balance),
+                "link": send_hash,
+                "signature": signature.hex(),
+                "work": work,
+            }
+            result = self.rpc.call("process", {"json_block": "true", "subtype": "receive", "block": block})
+            if result.get("error"):
+                print("pool receive: broadcast rejected:", result["error"])
+                break
+            print(f"pool receive: {addr} received {amount} raw ({result.get('hash')})")
+            previous = block_hash
+            balance = new_balance
+            received += 1
+        return received
+
+    def pool_receive_loop(self, interval: int = 30):
+        """Background sweep: keep pool accounts' pending deposits received."""
+        while True:
+            for denom in sorted(DENOMINATIONS):
+                try:
+                    self.receive_pool_pending(denom)
+                except Exception as e:
+                    print("pool receive loop error:", e)
+            time.sleep(interval)
+
     def _indexer_get(self, path: str) -> dict:
         resp = self.session.get(self.indexer_url + path, timeout=10)
         resp.raise_for_status()
@@ -188,8 +276,17 @@ class VelaGuardian:
         pool_sk, pool_pub = pool_keypair(denomination, self.seed)
         pool_addr = pool_address(denomination, self.seed)
 
-        # Fetch pool account info outside the lock.
+        # Fetch pool account info outside the lock. If the pool account is
+        # unopened or short on balance, receive pending deposits first.
         info = self._get_account_info(pool_addr)
+        if info.get("error") == "Account not found" or (
+            "error" not in info and int(info["balance"]) < denomination - withdraw_fee_for(denomination)
+        ):
+            try:
+                self.receive_pool_pending(denomination)
+            except Exception as e:
+                print("pool receive before withdraw failed:", e)
+            info = self._get_account_info(pool_addr)
         if "error" in info:
             return {"error": f"pool account info failed: {info['error']}"}
 
@@ -321,6 +418,15 @@ def create_app(guardian: VelaGuardian) -> Flask:
     def fee_route():
         return jsonify({"fee_bps": FEE_BPS, "note": "0% of denomination"})
 
+    @app.route("/nullifier/<nullifier_hex>")
+    @require_api_key
+    def nullifier_status(nullifier_hex):
+        try:
+            N = int(nullifier_hex, 16)
+        except ValueError:
+            return jsonify({"error": "invalid nullifier"}), 400
+        return jsonify({"nullifier": hex(N), "spent": N in guardian.spent_nullifiers})
+
     @app.route("/withdraw", methods=["POST"])
     @require_api_key
     def withdraw():
@@ -351,5 +457,6 @@ if __name__ == "__main__":
         sys.exit(1)
     seed = bytes.fromhex(seed_hex)
     guardian = VelaGuardian(seed)
+    threading.Thread(target=guardian.pool_receive_loop, daemon=True).start()
     app = create_app(guardian)
     serve(app, host="127.0.0.1", port=8081)
