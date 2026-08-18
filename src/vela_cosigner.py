@@ -365,4 +365,5 @@ if __name__ == "__main__":
     cosigner = Cosigner()
     app = create_app(cosigner)
     port = int(os.environ.get("COSIGNER_PORT", "8082"))
-    serve(app, host="127.0.0.1", port=port)
+    host = os.environ.get("COSIGNER_BIND", "127.0.0.1")
+    serve(app, host=host, port=port)
