@@ -20,10 +20,11 @@ with the indexer, enforce their own persisted nullifier set, and check the
 ledger through their own RPC view. A compromised coordinator alone can move
 funds only through a valid withdrawal.
 
-The signing crate is reused from the `trustlessXNOXMR` swap-core workspace
-(`signing`: an unmodified frost-core ciphersuite substituting Blake2b-512
-for SHA-512, so joint signatures verify as ordinary Nano signatures),
-pinned by git revision in `frost/Cargo.toml`.
+The ciphersuite is implemented first-party in `frost/src/suite.rs`: an
+unmodified-frost-core ciphersuite substituting Blake2b-512 for SHA-512, so
+joint signatures verify as ordinary Nano signatures. The ciphersuite ID
+string is a frozen protocol constant embedded in all deployed key material —
+never change it without a fresh DKG and full fund migration.
 
 ## 0. Prerequisites
 
