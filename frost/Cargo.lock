@@ -192,7 +192,6 @@ dependencies = [
  "cfg-if",
  "cpufeatures",
  "curve25519-dalek-derive",
- "digest",
  "fiat-crypto",
  "rand_core",
  "rustc_version",
@@ -298,13 +297,14 @@ dependencies = [
 name = "frost-guardian"
 version = "0.1.0"
 dependencies = [
+ "blake2",
  "clap",
+ "curve25519-dalek",
  "frost-core",
  "hex",
  "rand_core",
  "serde",
  "serde_json",
- "signing",
 ]
 
 [[package]]
@@ -529,29 +529,6 @@ checksum = "a84f14a19e9a014bb9f4512488d9829a68e04ecabffb0f9904cd1ace94598177"
 dependencies = [
  "base16ct",
  "serde",
-]
-
-[[package]]
-name = "sha2"
-version = "0.10.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
-dependencies = [
- "cfg-if",
- "cpufeatures",
- "digest",
-]
-
-[[package]]
-name = "signing"
-version = "0.1.0"
-source = "git+https://github.com/dhyabi2/trustlessXNOXMR.git?rev=3170fefe76f4aa196533de422d86a157ec6c2d12#3170fefe76f4aa196533de422d86a157ec6c2d12"
-dependencies = [
- "blake2",
- "curve25519-dalek",
- "frost-core",
- "rand_core",
- "sha2",
 ]
 
 [[package]]

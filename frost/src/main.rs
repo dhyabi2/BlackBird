@@ -20,7 +20,11 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand};
 use rand_core::OsRng;
 use serde_json::json;
-use signing::Ed25519Blake2b as E;
+
+mod nano_verify;
+mod suite;
+
+use suite::Ed25519Blake2b as E;
 
 type Identifier = frost_core::Identifier<E>;
 type DkgR1Secret = frost_core::keys::dkg::round1::SecretPackage<E>;
@@ -320,7 +324,7 @@ fn main() {
             let pubkey = pkp.verifying_key().serialize().unwrap_or_else(|e| die(&format!("{e}")));
             let pk32: [u8; 32] = pubkey.clone().try_into().unwrap_or_else(|_| die("bad group pubkey length"));
             let sig64: [u8; 64] = sig_bytes.clone().try_into().unwrap_or_else(|_| die("bad signature length"));
-            if !signing::nano_verify::verify(&pk32, sp.message(), &sig64) {
+            if !nano_verify::verify(&pk32, sp.message(), &sig64) {
                 die("aggregated signature failed independent ed25519-blake2b verification");
             }
             out(json!({ "signature": hex::encode(sig_bytes) }));
@@ -329,7 +333,7 @@ fn main() {
             let pk: [u8; 32] = hex_arg(&pubkey, "pubkey").try_into().unwrap_or_else(|_| die("pubkey must be 32 bytes"));
             let sig: [u8; 64] = hex_arg(&signature, "signature").try_into().unwrap_or_else(|_| die("signature must be 64 bytes"));
             let msg = hex_arg(&msg, "msg");
-            let ok = signing::nano_verify::verify(&pk, &msg, &sig);
+            let ok = nano_verify::verify(&pk, &msg, &sig);
             out(json!({ "valid": ok }));
             if !ok {
                 std::process::exit(2);
