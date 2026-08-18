@@ -4,7 +4,8 @@
     "ssh": "root@srv1906844.hstgr.cloud",
     "ssh_key": "~/.ssh/vela_test",
     "dir": "/opt/vela/data/frost",
-    "bin": "/opt/vela/bin/frost-guardian"
+    "bin": "/opt/vela/bin/frost-guardian",
+    "owner": "vela:vela"
   },
   {
     "id": 2,

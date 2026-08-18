@@ -44,6 +44,11 @@ class Host:
         self.ssh_key = cfg.get("ssh_key")
         self.dir = cfg["dir"]
         self.bin = cfg["bin"]
+        # user:group that must own the key material afterwards (the service
+        # account the guardian/cosigner runs as). The ceremony itself often
+        # runs as root over SSH; without this the service cannot read its
+        # own key share.
+        self.owner = cfg.get("owner")
 
     def _ssh_base(self) -> list:
         base = ["ssh"]
@@ -171,6 +176,8 @@ def dkg_for_denomination(hosts: list, denom: int) -> str:
     # guardian/indexer over to threshold custody for this denomination.
     for h in hosts:
         h.write_file(h.path(str(denom), "group_pubkey"), group_pubkey + "\n")
+        if h.owner:
+            h.run(["chown", "-R", h.owner, h.path(str(denom))])
     print(f"  denomination {denom}: group pubkey installed on all hosts")
     return group_pubkey
 

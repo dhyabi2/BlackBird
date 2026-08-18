@@ -114,7 +114,10 @@ class FrostSigner:
         os.close(fd)
         os.unlink(nonces_path)  # commit refuses to overwrite; give a fresh path
         try:
-            my_commit = frost_bridge.commit(self.key_package, nonces_path)
+            try:
+                my_commit = frost_bridge.commit(self.key_package, nonces_path)
+            except Exception as e:
+                raise FrostSigningError(f"local commit on coordinator failed (not a cosigner problem): {e}")
             their = self._post(url, "/frost/commit", {
                 "request_id": request_id,
                 "denomination": str(self.denomination),
@@ -122,7 +125,10 @@ class FrostSigner:
             signing_package = frost_bridge.make_signing_package(
                 msg_hex, {self.my_id: my_commit, cid: their["commitments"]}
             )
-            my_share = frost_bridge.sign(self.key_package, nonces_path, signing_package)
+            try:
+                my_share = frost_bridge.sign(self.key_package, nonces_path, signing_package)
+            except Exception as e:
+                raise FrostSigningError(f"local sign on coordinator failed (not a cosigner problem): {e}")
             their_sig = self._post(url, "/frost/sign", {
                 "request_id": request_id,
                 "denomination": str(self.denomination),
