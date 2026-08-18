@@ -41,13 +41,20 @@ class Host:
     def __init__(self, cfg: dict):
         self.id = int(cfg["id"])
         self.ssh = cfg.get("ssh")
+        self.ssh_key = cfg.get("ssh_key")
         self.dir = cfg["dir"]
         self.bin = cfg["bin"]
+
+    def _ssh_base(self) -> list:
+        base = ["ssh"]
+        if self.ssh_key:
+            base += ["-i", os.path.expanduser(self.ssh_key)]
+        return base + [self.ssh]
 
     def run(self, args: list, stdin: str = None) -> str:
         """Run a command on this host; return stdout."""
         if self.ssh:
-            cmd = ["ssh", self.ssh, " ".join(shlex.quote(a) for a in args)]
+            cmd = self._ssh_base() + [" ".join(shlex.quote(a) for a in args)]
         else:
             cmd = args
         proc = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=120)
@@ -63,7 +70,7 @@ class Host:
         if self.ssh:
             self.run(["mkdir", "-p", os.path.dirname(path)])
             proc = subprocess.run(
-                ["ssh", self.ssh, f"cat > {shlex.quote(path)}"],
+                self._ssh_base() + [f"cat > {shlex.quote(path)}"],
                 input=content, capture_output=True, text=True, timeout=60,
             )
             if proc.returncode != 0:

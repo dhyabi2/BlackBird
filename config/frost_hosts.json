@@ -1,0 +1,23 @@
+[
+  {
+    "id": 1,
+    "ssh": "root@srv1906844.hstgr.cloud",
+    "ssh_key": "~/.ssh/vela_test",
+    "dir": "/opt/vela/data/frost",
+    "bin": "/opt/vela/bin/frost-guardian"
+  },
+  {
+    "id": 2,
+    "ssh": "root@76.13.220.231",
+    "ssh_key": "~/.ssh/vela_test",
+    "dir": "/opt/vela/data/frost",
+    "bin": "/opt/vela/bin/frost-guardian"
+  },
+  {
+    "id": 3,
+    "ssh": "root@168.231.114.66",
+    "ssh_key": "~/.ssh/vela_test",
+    "dir": "/opt/vela/data/frost",
+    "bin": "/opt/vela/bin/frost-guardian"
+  }
+]
