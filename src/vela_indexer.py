@@ -20,7 +20,14 @@ from typing import Dict, List, Optional, Tuple
 import requests
 from flask import Flask, request, jsonify
 
-from .vela_crypto import pool_pubkey, pool_address, nano_pubkey_from_address, compute_commitment, compute_nullifier
+from .vela_crypto import (
+    pool_pubkey,
+    pool_address,
+    legacy_pool_pubkeys,
+    nano_pubkey_from_address,
+    compute_commitment,
+    compute_nullifier,
+)
 from .work_service import WorkService, SEND_DIFFICULTY, RECEIVE_DIFFICULTY
 from .poseidon_bridge import poseidon_tree, split32
 from .snarkjs_bridge import generate_proof
@@ -190,7 +197,13 @@ class VelaIndexer:
             if amount_raw not in DENOMINATIONS:
                 return None
 
-            if dep_block.get("link", "").lower() != pool_pubkey(amount_raw).hex().lower():
+            # Accept the current pool pubkey or any legacy (pre-migration)
+            # pool pubkey: deposits made just before a key rotation may only
+            # be indexed after it.
+            dep_link = dep_block.get("link", "").lower()
+            valid_pool_pubs = {pool_pubkey(amount_raw).hex().lower()}
+            valid_pool_pubs.update(p.hex().lower() for p in legacy_pool_pubkeys(amount_raw))
+            if dep_link not in valid_pool_pubs:
                 return None
 
             # The commitment block must chain directly from the deposit block.
@@ -439,9 +452,18 @@ def create_app(indexer: VelaIndexer) -> Flask:
             if denomination not in DENOMINATIONS:
                 return jsonify({"error": "unsupported denomination"}), 400
 
-            S_pub = pool_pubkey(denomination)
-            C = compute_commitment(n, t, P_w, S_pub)
-            proof_info = indexer.get_proof(epoch, denomination, C)
+            # Deposits bind the pool pubkey that was current when they were
+            # made. Try the current key first, then any legacy keys, so
+            # commitments created before a key rotation stay provable.
+            S_pub = None
+            proof_info = None
+            candidates = [pool_pubkey(denomination)] + legacy_pool_pubkeys(denomination)
+            for cand in candidates:
+                C = compute_commitment(n, t, P_w, cand)
+                proof_info = indexer.get_proof(epoch, denomination, C)
+                if proof_info is not None:
+                    S_pub = cand
+                    break
             if proof_info is None:
                 return jsonify({"error": "commitment not in tree"}), 404
 
@@ -489,6 +511,9 @@ def create_app(indexer: VelaIndexer) -> Flask:
         return jsonify({
             "denomination": str(denomination),
             "pool_pubkey": pub.hex(),
+            # Pre-migration pool pubkeys: commitments deposited under an old
+            # key still reference it, so clients must try these when matching.
+            "legacy_pubkeys": [p.hex() for p in legacy_pool_pubkeys(denomination)],
         })
 
     @app.route("/root/<int:epoch>/<int:denomination>")

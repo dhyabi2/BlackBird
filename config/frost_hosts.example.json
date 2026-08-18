@@ -1,0 +1,20 @@
+[
+  {
+    "id": 1,
+    "ssh": "root@srv1906844.hstgr.cloud",
+    "dir": "/opt/vela/data/frost",
+    "bin": "/opt/vela/bin/frost-guardian"
+  },
+  {
+    "id": 2,
+    "ssh": "root@COSIGNER2_HOST",
+    "dir": "/opt/vela/data/frost",
+    "bin": "/opt/vela/bin/frost-guardian"
+  },
+  {
+    "id": 3,
+    "ssh": "root@COSIGNER3_HOST",
+    "dir": "/opt/vela/data/frost",
+    "bin": "/opt/vela/bin/frost-guardian"
+  }
+]

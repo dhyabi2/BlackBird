@@ -34,6 +34,17 @@ config/
   vela-guardian.service
 ```
 
+## Threshold Custody (FROST 2-of-3)
+
+Pool custody is moving from a single guardian key to 2-of-3 FROST
+(Ed25519, Blake2b-512) threshold signing across three machines — no single
+machine ever holds the pool key, and key generation is a true DKG (no
+trusted dealer). The Nano-compatible ciphersuite is reused from the
+[trustlessXNOXMR](https://github.com/dhyabi2/trustlessXNOXMR) swap-core
+`signing` crate. See [`docs/FROST_MIGRATION.md`](docs/FROST_MIGRATION.md)
+for the deployment and fund-migration runbook, `frost/` for the signing
+CLI, and `src/vela_cosigner.py` for the verifying cosigner service.
+
 ## Deployed Services
 
 A single-guardian deployment is running on a Hostinger VPS for testing and integration:

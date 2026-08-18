@@ -257,8 +257,40 @@ def _guardian_seed() -> bytes:
     return bytes.fromhex(seed_hex)
 
 
-def pool_keypair(denomination: int, seed: Optional[bytes] = None) -> Tuple[ed25519_blake2b.SigningKey, bytes]:
-    """Derive the spendable pool keypair for a denomination from the guardian seed."""
+def frost_data_dir() -> str:
+    """Directory holding FROST threshold key material, one subdir per denomination."""
+    return os.environ.get("FROST_DATA_DIR", "data/frost")
+
+
+def frost_group_pubkey(denomination: int) -> Optional[bytes]:
+    """Return the FROST group public key for a denomination, or None if this
+    denomination has not been migrated to threshold custody."""
+    path = os.path.join(frost_data_dir(), str(denomination), "group_pubkey")
+    try:
+        with open(path) as f:
+            pub = bytes.fromhex(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    return pub if len(pub) == POINT_BYTES else None
+
+
+def legacy_pool_pubkeys(denomination: int) -> list:
+    """Previous (pre-migration) pool pubkeys for a denomination. Old deposit
+    commitments bind the pool pubkey that was current at deposit time, so the
+    prover must be able to try these when recomputing commitments."""
+    path = os.path.join(frost_data_dir(), str(denomination), "legacy_pubkeys")
+    try:
+        with open(path) as f:
+            import json
+            return [bytes.fromhex(h) for h in json.load(f)]
+    except (OSError, ValueError):
+        return []
+
+
+def legacy_pool_keypair(denomination: int, seed: Optional[bytes] = None) -> Tuple[ed25519_blake2b.SigningKey, bytes]:
+    """Derive the single-key pool keypair from the guardian seed. Only valid
+    for denominations not yet migrated to FROST (and for draining old pool
+    accounts during migration)."""
     if seed is None:
         seed = _guardian_seed()
     data = seed + str(denomination).encode()
@@ -268,8 +300,24 @@ def pool_keypair(denomination: int, seed: Optional[bytes] = None) -> Tuple[ed255
     return sk, pk
 
 
+def pool_keypair(denomination: int, seed: Optional[bytes] = None) -> Tuple[ed25519_blake2b.SigningKey, bytes]:
+    """Single-key pool keypair. Raises for FROST-migrated denominations: the
+    full private key no longer exists anywhere — use the threshold signer."""
+    if frost_group_pubkey(denomination) is not None:
+        raise RuntimeError(
+            f"denomination {denomination} uses FROST threshold custody; "
+            "no single pool key exists (use frost_signer)"
+        )
+    return legacy_pool_keypair(denomination, seed)
+
+
 def pool_pubkey(denomination: int, seed: Optional[bytes] = None) -> bytes:
-    return pool_keypair(denomination, seed)[1]
+    """Current pool public key: the FROST group key once a denomination is
+    migrated, otherwise the seed-derived single key."""
+    frost_pub = frost_group_pubkey(denomination)
+    if frost_pub is not None:
+        return frost_pub
+    return legacy_pool_keypair(denomination, seed)[1]
 
 
 def pool_address(denomination: int, seed: Optional[bytes] = None) -> str:

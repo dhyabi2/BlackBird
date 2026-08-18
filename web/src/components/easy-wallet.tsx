@@ -449,7 +449,13 @@ export default function EasyWallet() {
           const poolData = await apiGet(`/api/pool_address/${denom}`).catch(() => null);
           if (!alive) return;
           if (!poolData) continue;
-          const S_pub = hexToBytes(poolData.pool_pubkey as string);
+          // Old shields bind the pool pubkey current at deposit time, so try
+          // the active key and every pre-migration key.
+          const sPubCandidates = [
+            poolData.pool_pubkey as string,
+            ...((poolData.legacy_pubkeys as string[] | undefined) ?? []),
+          ].map(hexToBytes);
+          for (const S_pub of sPubCandidates)
           for (const legacy of [false, true]) {
             const { n, t } = shieldSecrets(seed, withdraw.publicKey, String(denom), legacy);
             const C_hex = computeCommitment(n, t, P_w, S_pub).toString(16).padStart(64, "0");
@@ -1030,11 +1036,17 @@ export default function EasyWallet() {
       // denomination-scoped scheme first, then the legacy scheme for shields
       // created before the fix. The indexed commitment tells us which one.
       const poolInfo = await apiGet(`/api/pool_address/${effectiveDenom}`);
-      const S_pubW = hexToBytes(poolInfo.pool_pubkey as string);
+      // The shield may predate a pool key rotation: try the active pool
+      // pubkey and every legacy pubkey when resolving the commitment.
+      const sPubWCandidates = [
+        poolInfo.pool_pubkey as string,
+        ...((poolInfo.legacy_pubkeys as string[] | undefined) ?? []),
+      ].map(hexToBytes);
       const P_wBytes = hexToBytes(withdraw.publicKey);
       let { n, t } = shieldSecrets(seed!, withdraw.publicKey, String(effectiveDenom));
       let withdrawEpoch = epoch;
       let resolved = false;
+      resolve: for (const S_pubW of sPubWCandidates)
       for (const legacy of [false, true]) {
         const candidate = legacy
           ? shieldSecrets(seed!, withdraw.publicKey, String(effectiveDenom), true)
@@ -1052,7 +1064,7 @@ export default function EasyWallet() {
           if (typeof status.epoch === "number") withdrawEpoch = status.epoch;
           resolved = true;
           if (legacy) log("Using legacy shield derivation for this withdrawal.");
-          break;
+          break resolve;
         }
       }
       if (!resolved) throw new Error("WITHDRAW-RESOLVE: No indexed shield found for this withdraw account");

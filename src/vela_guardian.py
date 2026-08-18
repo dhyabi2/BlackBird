@@ -22,10 +22,12 @@ from flask import Flask, request, jsonify
 from .vela_crypto import (
     pool_keypair,
     pool_address,
+    pool_pubkey,
     nano_pubkey_from_address,
     nano_state_block_hash,
     sign_message,
 )
+from .frost_signer import FrostSigner, frost_enabled
 from .poseidon_bridge import split32
 from .snarkjs_bridge import verify_proof
 from .nano_rpc import NanoRPC
@@ -64,7 +66,23 @@ class VelaGuardian:
         # Nullifiers that have been signed but not yet broadcast.
         self.pending_withdrawals: dict = {}
         self._lock = threading.Lock()
+        self._frost_signers: dict = {}
         self._load_state()
+
+    def _frost_signer(self, denomination: int) -> FrostSigner:
+        signer = self._frost_signers.get(denomination)
+        if signer is None:
+            signer = FrostSigner(denomination)
+            self._frost_signers[denomination] = signer
+        return signer
+
+    def _sign_pool_block(self, denomination: int, block_hash: bytes, context: dict) -> bytes:
+        """Sign a pool state block hash: 2-of-3 FROST for migrated
+        denominations, the legacy single key otherwise."""
+        if frost_enabled(denomination):
+            return self._frost_signer(denomination).sign(block_hash, context)
+        pool_sk, _ = pool_keypair(denomination, self.seed)
+        return sign_message(pool_sk, block_hash)
 
     def _state_path(self) -> str:
         return os.path.join(self.data_dir, "guardian_state.json")
@@ -132,7 +150,7 @@ class VelaGuardian:
         them before the guardian can sign withdrawals. Returns the number of
         receive blocks broadcast.
         """
-        pool_sk, pool_pub = pool_keypair(denomination, self.seed)
+        pool_pub = pool_pubkey(denomination, self.seed)
         addr = pool_address(denomination, self.seed)
 
         pending = self.rpc.call("receivable", {"account": addr, "count": str(max_blocks), "source": "true"})
@@ -161,19 +179,24 @@ class VelaGuardian:
             new_balance = balance + amount
             link = bytes.fromhex(send_hash)
             block_hash = nano_state_block_hash(pool_pub, previous, rep_pub, new_balance, link)
-            signature = sign_message(pool_sk, block_hash)
-            work_root = pool_pub if previous == self.ZERO_32 else previous
-            work = self._generate_receive_work(work_root)
-            block = {
+            block_fields = {
                 "type": "state",
                 "account": addr,
                 "previous": previous.hex(),
                 "representative": rep_addr,
                 "balance": str(new_balance),
                 "link": send_hash,
-                "signature": signature.hex(),
-                "work": work,
             }
+            try:
+                signature = self._sign_pool_block(
+                    denomination, block_hash, {"type": "receive", "block": block_fields}
+                )
+            except Exception as e:
+                print("pool receive: signing failed:", e)
+                break
+            work_root = pool_pub if previous == self.ZERO_32 else previous
+            work = self._generate_receive_work(work_root)
+            block = {**block_fields, "signature": signature.hex(), "work": work}
             result = self.rpc.call("process", {"json_block": "true", "subtype": "receive", "block": block})
             if result.get("error"):
                 print("pool receive: broadcast rejected:", result["error"])
@@ -287,8 +310,7 @@ class VelaGuardian:
         P_w = verified["P_w"]
         N = verified["N"]
 
-        # Derive the spendable pool keypair for this denomination.
-        pool_sk, pool_pub = pool_keypair(denomination, self.seed)
+        pool_pub = pool_pubkey(denomination, self.seed)
         pool_addr = pool_address(denomination, self.seed)
 
         # Fetch pool account info outside the lock. If the pool account is
@@ -346,18 +368,25 @@ class VelaGuardian:
                 new_balance,
                 P_w,
             )
-            signature = sign_message(pool_sk, block_hash)
-
-            block = {
+            block_fields = {
                 "type": "state",
                 "account": pool_addr,
                 "previous": previous.hex(),
                 "representative": info["representative"],
                 "balance": str(new_balance),
                 "link": P_w.hex(),
-                "signature": signature.hex(),
-                "work": "0000000000000000",
             }
+            try:
+                signature = self._sign_pool_block(
+                    denomination,
+                    block_hash,
+                    {"type": "withdraw", "block": block_fields, "request": req},
+                )
+            except Exception as e:
+                print("withdraw: signing failed:", e)
+                return {"error": f"signing failed: {e}"}
+
+            block = {**block_fields, "signature": signature.hex(), "work": "0000000000000000"}
 
             self.pending_withdrawals[N] = {
                 "block": block,

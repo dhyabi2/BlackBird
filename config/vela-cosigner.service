@@ -1,0 +1,14 @@
+[Unit]
+Description=VELA FROST Cosigner
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/vela
+ExecStart=/opt/vela/scripts/start_cosigner.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
