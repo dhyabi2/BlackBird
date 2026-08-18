@@ -5,12 +5,13 @@ edition = "2021"
 description = "Stateless CLI for FROST ed25519-blake2b threshold signing of Nano blocks (VELA guardian network)"
 
 [dependencies]
-# Nano-compatible FROST ciphersuite from the trustlessXNOXMR swap-core workspace.
-# Pinned to a pushed revision so VPS builds are reproducible. For local
-# development against a checkout, use:
-#   [patch."https://github.com/dhyabi2/trustlessXNOXMR.git"]
-#   signing = { path = "/Users/mac/trustlessXNOXMR/swap-core/signing" }
-signing = { git = "https://github.com/dhyabi2/trustlessXNOXMR.git", rev = "3170fefe76f4aa196533de422d86a157ec6c2d12" }
+# Nano-compatible FROST ciphersuite from the trustlessXNOXMR swap-core
+# workspace, vendored at rev 3170fefe76f4aa196533de422d86a157ec6c2d12
+# (see vendor/signing). Vendored rather than a git dependency because the
+# upstream repo is private and cosigner VPSes build without its credentials.
+# To update: re-copy swap-core/signing from the upstream checkout and record
+# the new revision here.
+signing = { path = "vendor/signing" }
 frost-core = { version = "2.2", features = ["internals"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 serde = { version = "1", features = ["derive"] }

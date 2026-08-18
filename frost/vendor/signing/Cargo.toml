@@ -1,0 +1,17 @@
+[package]
+name = "signing"
+version = "0.1.0"
+edition = "2021"
+description = "FROST ed25519-blake2b ciphersuite (Nano-compatible) + adaptor signature module"
+
+[dependencies]
+frost-core = { version = "2", features = ["internals"] }
+curve25519-dalek = { version = "4", features = ["rand_core", "digest"] }
+blake2 = "0.10"
+rand_core = "0.6"
+sha2 = "0.10"
+
+[dev-dependencies]
+rand = "0.8"
+hex = "0.4"
+frost-ed25519 = "2"
