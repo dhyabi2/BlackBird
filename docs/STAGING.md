@@ -57,4 +57,4 @@ A staging environment lets you test deposits and withdrawals without touching th
 ## Notes
 
 - Never reuse the production guardian seed in staging. A different seed means a different pool address, so staging activity cannot be confused with production.
-- The current prototype stores indexer state in `data/indexer_state.json` on disk. Keep staging and production data directories separate (use `--data-dir` or separate VPS).
+- The indexer currently stores state in `data/indexer_state.json` on disk. Keep staging and production data directories separate (use `--data-dir` or separate VPS).

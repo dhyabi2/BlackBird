@@ -214,13 +214,13 @@ This limits the unaudited surface to the hash-function substitutions and the con
 
 - Ed25519 group operations unchanged from `frost-ed25519`.
 - SHA-512 replaced by Blake2b-512 only where the Ed25519-blake2b variant requires it.
-- Distinct context strings (e.g., `"BLACKBIRD.frost-ed25519-blake2b-v1"`) to prevent cross-protocol replay.
+- A distinct context string (`"XNOXMR-FROST-ED25519-BLAKE2B-v1"`, a frozen constant embedded in all deployed key material) to prevent cross-protocol replay.
 
 ### Key generation and share refresh
 
-#### Prototype: trusted dealer
+#### Deployed: three-round FROST DKG
 
-For the prototype, a **trusted dealer** distributes FROST shares to guardians. The dealer is trusted only at setup; it does not participate in signing and is destroyed after distribution. This lets the protocol use `frost-core`'s verifiable share generation and avoids the complexity of a production DKG before the ciphersuite is fully audited.
+The deployed network generates keys with `frost-core`'s three-round **distributed key generation** (Pedersen/Feldman-style, RFC 9591 appendix): each guardian runs the rounds on its own machine, only public round packages transit between hosts, and the full private key never exists anywhere at any point. The ceremony cross-checks that all guardians derive the identical group key and test-signs with every `t`-subset before the key is activated. There is no trusted dealer.
 
 #### Production: asynchronous Feldman VSS DKG
 
@@ -506,7 +506,7 @@ These social measures are not automatic, but they make repeated misbehavior unsu
 
 ## 12. Client Performance
 
-Withdrawing requires a Groth16 proof over a depth-20 Poseidon Merkle tree. In the prototype this is done by calling `snarkjs` through a Node.js bridge because Python 3.14 cannot install a native Poseidon library. The bridge adds process startup and serialization overhead, so the client experience is slower than necessary.
+Withdrawing requires a Groth16 proof over a depth-20 Poseidon Merkle tree. Currently this is done by calling `snarkjs` through a Node.js bridge because Python 3.14 cannot install a native Poseidon library. The bridge adds process startup and serialization overhead, so the client experience is slower than necessary.
 
 ### Performance roadmap
 
