@@ -242,6 +242,9 @@ export default function EasyWallet() {
     }
   }, [withdrawIndex]);
   const [externalAvailable, setExternalAvailable] = useState<bigint | null>(null);
+  // Persistent outcome of the last external send, shown under the button
+  // (statusMessage is transient and only visible while the action runs).
+  const [externalResult, setExternalResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [greenlight, setGreenlight] = useState<{ ok: boolean; error?: string } | null>(null);
   const [feeBps, setFeeBps] = useState(0);
 
@@ -730,6 +733,7 @@ export default function EasyWallet() {
     }
     setBusy(true);
     setActiveAction("external");
+    setExternalResult(null);
     setStatusMessage("Sending to external address...");
     try {
       let totalSent = BigInt(0);
@@ -783,13 +787,20 @@ export default function EasyWallet() {
       if (totalSent === BigInt(0)) {
         log("No spendable funds found to send.");
         setStatusMessage(null);
+        setExternalResult({ ok: false, text: "No spendable funds found to send." });
       } else {
         log(`Total sent to ${destination}: ${nano(totalSent)} XNO`);
-        setStatusMessage(`Sent ${nano(totalSent)} XNO. It will appear at the destination shortly.`);
+        setStatusMessage(null);
+        setExternalResult({
+          ok: true,
+          text: `Successfully sent ${nano(totalSent)} XNO. It will appear at the destination shortly.`,
+        });
       }
     } catch (err) {
       setStatusMessage(null);
-      log(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+      const message = err instanceof Error ? err.message : String(err);
+      log(`ERROR: ${message}`);
+      setExternalResult({ ok: false, text: `Send failed: ${message}` });
     } finally {
       setBusy(false);
       setActiveAction(null);
@@ -1447,6 +1458,18 @@ export default function EasyWallet() {
           <div className="mt-3 rounded-lg border border-black/10 bg-black/5 px-4 py-3 text-sm text-black">
             <span className="mr-2 inline-block h-3 w-3 animate-spin rounded-full border border-black/30 border-t-black" />
             {statusMessage}
+          </div>
+        )}
+        {externalResult && !(statusMessage && activeAction === "external") && (
+          <div
+            className={`mt-3 rounded-lg border px-4 py-3 text-sm ${
+              externalResult.ok
+                ? "border-green-600/30 bg-green-50 text-green-800"
+                : "border-red-600/30 bg-red-50 text-red-800"
+            }`}
+          >
+            {externalResult.ok ? "✓ " : "✗ "}
+            {externalResult.text}
           </div>
         )}
       </div>
