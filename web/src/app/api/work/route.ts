@@ -29,18 +29,10 @@ export async function POST(request: NextRequest) {
 
     const threshold = parsed.data.difficulty ?? "fffffe0000000000";
 
-    // 1. Backend work service: pre-warmed cache (pool frontiers, post-broadcast
-    //    roots) or on-demand CPU compute for receive difficulty.
-    const serverWork = await getServerWork(parsed.data.hash, threshold);
-    if (serverWork && validateWork(serverWork, parsed.data.hash, threshold)) {
-      return { work: serverWork, source: "server" };
-    }
-
-    // 2. rpc.nano.to and the public work endpoints, all in parallel, each
-    //    validated locally — first valid result wins. rpc.nano.to has a
-    //    history of returning invalid nonces and the public endpoints are
-    //    flaky, so validation is what makes them safe to use at all.
-    const primaryAttempt = nanoRpcCall("work_generate", {
+    // 1. Primary: the paid rpc.nano.to GPU work service (~0.1-0.6s; their
+    //    invalid-nonce bug was fixed 2026-08-19). Every nonce is still
+    //    validated locally before use — never trusted blindly.
+    const primary = await nanoRpcCall("work_generate", {
       hash: parsed.data.hash,
       difficulty: threshold,
     })
@@ -51,6 +43,17 @@ export async function POST(request: NextRequest) {
           : null;
       })
       .catch(() => null);
+    if (primary) return primary;
+
+    // 2. Fallback (RPC down or invalid nonce): the backend work service
+    //    (pre-warmed cache / CPU compute) and the flaky public endpoints in
+    //    parallel — first locally-valid result wins.
+    const serverAttempt = getServerWork(parsed.data.hash, threshold).then(
+      (work) =>
+        work && validateWork(work, parsed.data.hash, threshold)
+          ? { work, source: "server" }
+          : null
+    );
 
     const publicAttempt = getPublicWork(parsed.data.hash, threshold);
 
@@ -60,7 +63,7 @@ export async function POST(request: NextRequest) {
         if (r) resolve(r);
         else if (--unresolved === 0) resolve(null);
       };
-      primaryAttempt.then(settle);
+      serverAttempt.then(settle, () => settle(null));
       publicAttempt.then(settle, () => settle(null));
     });
 

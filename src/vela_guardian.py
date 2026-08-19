@@ -128,12 +128,25 @@ class VelaGuardian:
     ZERO_32 = b"\x00" * 32
 
     def _generate_receive_work(self, root: bytes) -> str:
-        """CPU proof-of-work at the receive threshold (~10-60s).
+        """Proof-of-work at the receive threshold.
 
-        Returns the 16-char big-endian hex work value; the hash input uses the
-        little-endian byte order per the Nano protocol.
+        Primary: the remote RPC work service (validated locally). Fallback:
+        CPU search (~10-60s). Returns the 16-char big-endian hex work value;
+        the hash input uses the little-endian byte order per the protocol.
         """
         import hashlib
+
+        from .work_service import validate_work
+
+        try:
+            result = self.rpc.call("work_generate", {
+                "hash": root.hex(), "difficulty": "fffffe0000000000",
+            })
+            work = (result.get("work") or "").strip()
+            if work and validate_work(work, root.hex(), "fffffe0000000000"):
+                return work
+        except Exception as e:
+            print("receive work via RPC failed, falling back to CPU:", e)
 
         value = int.from_bytes(secrets.token_bytes(8), "little")
         while True:

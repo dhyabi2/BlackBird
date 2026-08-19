@@ -2,9 +2,10 @@ import { validateWork } from "./work";
 
 // Public Nano RPCs that at least occasionally serve valid work_generate.
 // Surveyed 22 known public endpoints (2026-08): most are dead, refuse
-// work_generate, or return invalid nonces (rpc.nano.to). These two have
-// working-but-flaky upstream work servers, so they are queried in parallel
-// as long-shot fallbacks and every response is validated before use.
+// work_generate, or return invalid nonces. These two have working-but-flaky
+// upstream work servers, so they are queried as last-resort fallbacks
+// (behind the primary rpc.nano.to GPU service) and every response is
+// validated before use.
 const DEFAULT_PUBLIC_WORK_URLS = [
   "https://nanoslo.0x.no/proxy",
   "https://rainstorm.city/api",
