@@ -125,7 +125,7 @@ function withdrawFeeRaw(denominationRaw: bigint, bps: number): bigint {
 const WALLET_FRIENDLY_PADDING_RAW = BigInt(10) ** BigInt(24); // 0.000001 XNO
 
 function explorerLink(hash: string) {
-  return `https://nanexplorer.com/nano/blocks/${hash}`;
+  return `https://blocklattice.io/block/${hash}`;
 }
 
 async function apiPost(path: string, body: unknown) {
