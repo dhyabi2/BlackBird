@@ -31,3 +31,6 @@ circuit/build/vela_js/witness.wtns
 .vscode/
 .idea/
 .vercel
+
+# Internal ops runbook — never publish
+DEPLOYMENT_INTERNAL.md
