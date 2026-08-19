@@ -559,7 +559,10 @@ The target is sub-second proof generation on a commodity laptop and a path to br
 A production Next.js web client lives in `web/` and is designed to deploy on Vercel:
 
 - **Vercel hosts** the static/dynamic UI and lightweight serverless API routes.
-- **Hostinger VPS hosts** the heavy backend: indexer, guardian, coordinator/prover.
+- **Three VPSes host the guardian network**: the coordinator VPS runs the
+  indexer, guardian coordinator, and prover; two cosigner VPSes in separate
+  regions each hold a FROST key share and independently re-verify every
+  block (and withdrawal proof) before contributing a signature share.
 - **rpc.nano.to** provides server-side Nano RPC access via `NANO_RPC_KEY`.
 
 Key API routes:

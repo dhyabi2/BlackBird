@@ -15,23 +15,36 @@ src/
   poseidon_bridge.py       # Python → Node Poseidon/circomlibjs bridge
   snarkjs_bridge.py        # Python → snarkjs Groth16 prove/verify bridge
   vela_indexer.py          # Tracks deposits/commitments, Poseidon Merkle trees
-  vela_guardian.py         # Guardian service (threshold signing in implementation phase)
+  vela_guardian.py         # Guardian coordinator (2-of-3 FROST threshold signing)
+  vela_cosigner.py         # Verifying cosigner service (guardians 2 and 3)
+  frost_signer.py          # Coordinator-side FROST ceremony + cosigner failover
+  frost_bridge.py          # Python bridge to the frost-guardian CLI
   vela_client.py           # CLI for deposits and withdrawals
 circuit/
   vela.circom              # Circom withdrawal circuit
   build/                   # Compiled circuit artifacts (r1cs, wasm, zkey, vk)
   poseidon_js/             # Node.js snarkjs helper
+frost/
+  src/                     # frost-guardian CLI: Ed25519-Blake2b ciphersuite,
+                           # DKG rounds, threshold signing, independent verify
 docs/
   VELA_v2_architecture.bpmn # Full BPMN 2.0 model of the protocol
+  FROST_MIGRATION.md       # Threshold custody deployment & migration runbook
 scripts/
   poseidon_helper.mjs      # Node Poseidon/Merkle helper
-  deploy.sh                # Deploy to Hostinger VPS
-  setup_vps.sh             # One-time VPS setup
+  deploy.sh                # Deploy coordinator to its VPS
+  setup_vps.sh             # One-time coordinator VPS setup
+  setup_cosigner_vps.sh    # One-time cosigner VPS setup
+  deploy_cosigner.sh       # Deploy a cosigner
+  frost_ceremony.py        # 3-machine FROST DKG ceremony
+  migrate_pool.py          # Journaled single-key -> threshold fund migration
   start_indexer.sh         # Start indexer service
-  start_guardian.sh        # Start guardian service
+  start_guardian.sh        # Start guardian (coordinator) service
+  start_cosigner.sh        # Start cosigner service
 config/
   vela-indexer.service
   vela-guardian.service
+  vela-cosigner.service
 ```
 
 ## Threshold Custody (FROST 2-of-3)

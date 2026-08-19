@@ -1,11 +1,12 @@
 """
-VELA v2 Guardian.
+VELA v2 Guardian (coordinator).
 
-Single-key guardian implementation that holds the pool signing key, verifies
-Groth16 ZK withdrawal proofs, and signs/broadcasts Nano withdrawal transactions.
-
-The production design uses a t-of-n FROST threshold signer set so that no
-single machine controls the pool key. See DESIGN.md for the full architecture.
+Verifies Groth16 ZK withdrawal proofs and signs/broadcasts pool blocks.
+Signing is 2-of-3 FROST threshold: this coordinator holds one key share and
+runs the two-round ceremony with a verifying cosigner (src/vela_cosigner.py)
+on another machine — no single machine controls the pool key. Denominations
+not yet migrated to threshold custody fall back to the legacy seed-derived
+single key. See DESIGN.md for the full architecture.
 """
 import functools
 import json
