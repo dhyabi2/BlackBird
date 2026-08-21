@@ -30,16 +30,24 @@ export async function POST(request: NextRequest) {
     const threshold = parsed.data.difficulty ?? "fffffe0000000000";
 
     // 1. Primary: the paid rpc.nano.to GPU work service (~0.1-0.6s; their
-    //    invalid-nonce bug was fixed 2026-08-19). Every nonce is still
+    //    invalid-nonce bug was fixed 2026-08-19), with rpc.nano-gpt.com as the
+    //    transport-level fallback inside nanoRpcCall (its keyless tier does
+    //    not serve work_generate, so in practice work still comes from
+    //    nano.to; the fallback covers every other RPC action). Short timeout
+    //    per endpoint — work_generate is known to hang. Every nonce is still
     //    validated locally before use — never trusted blindly.
-    const primary = await nanoRpcCall("work_generate", {
-      hash: parsed.data.hash,
-      difficulty: threshold,
-    })
+    const primary = await nanoRpcCall(
+      "work_generate",
+      {
+        hash: parsed.data.hash,
+        difficulty: threshold,
+      },
+      10_000
+    )
       .then((r) => {
         const work = (r as { work?: string }).work;
         return work && validateWork(work, parsed.data.hash, threshold)
-          ? { work, source: "rpc.nano.to" }
+          ? { work, source: "rpc" }
           : null;
       })
       .catch(() => null);

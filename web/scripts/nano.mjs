@@ -9,7 +9,12 @@ export const SEND_THRESHOLD = "fffffff800000000";
 export const RECEIVE_THRESHOLD = "fffffe0000000000";
 export const DEFAULT_REP = "nano_3jwrszth46rk1mu7rmb4rhm54us8yg1gw3ipodftqtikf5yqdyr7471nsg1k";
 
+// rpc.nano.to is the PRIMARY and only keyed endpoint. rpc.nano-gpt.com is the
+// SOLE permitted fallback (same rule as holdergame): keyless, tried only when
+// nano.to does not answer (transport failure/timeout), and its keyless tier
+// does not serve work_generate. The API key is never sent to the fallback.
 const RPC_URL = "https://rpc.nano.to";
+const FALLBACK_RPC_URL = "https://rpc.nano-gpt.com";
 const RPC_KEY = process.env.NANO_RPC_KEY || "";
 const RPC_TIMEOUT = 20000;
 const RPC_RETRIES = 3;
@@ -134,31 +139,47 @@ export function buildReceiveBlock(
   return { hash: stateBlockHash(signed), block: signed };
 }
 
+// A real answer from a responsive endpoint (e.g. a semantic RPC error) —
+// never a reason to fail over to the other endpoint.
+class RpcSemanticError extends Error {}
+
+async function callRpcEndpoint(url, body, headers) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), RPC_TIMEOUT);
+  try {
+    const response = await fetch(url, { method: "POST", headers, body, signal: controller.signal });
+    if (!response.ok) throw new Error(`RPC HTTP ${response.status}`);
+    const data = await response.json();
+    if (data.error && data.error !== "Account not found") throw new RpcSemanticError(data.error);
+    return data;
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error(`RPC timeout (${RPC_TIMEOUT}ms)`);
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function rpcCall(action, params = {}) {
   const body = JSON.stringify({ action, ...params });
   const headers = { "Content-Type": "application/json" };
-  if (RPC_KEY) headers.Authorization = RPC_KEY;
+  // The API key belongs to rpc.nano.to ONLY — never sent to the fallback.
+  const keyedHeaders = RPC_KEY ? { ...headers, Authorization: RPC_KEY } : headers;
 
   let lastError;
   for (let attempt = 1; attempt <= RPC_RETRIES; attempt++) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), RPC_TIMEOUT);
     try {
-      const response = await fetch(RPC_URL, {
-        method: "POST",
-        headers,
-        body,
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error(`RPC HTTP ${response.status}`);
-      const data = await response.json();
-      if (data.error && data.error !== "Account not found") throw new Error(data.error);
-      return data;
+      return await callRpcEndpoint(RPC_URL, body, keyedHeaders);
     } catch (err) {
-      lastError = err.name === "AbortError" ? new Error(`RPC timeout (${RPC_TIMEOUT}ms)`) : err;
-      console.warn(`[Nano] RPC ${RPC_URL} attempt ${attempt}/${RPC_RETRIES} failed:`, lastError.message);
-    } finally {
-      clearTimeout(timeout);
+      if (err instanceof RpcSemanticError) throw new Error(err.message);
+      lastError = err;
+      console.warn(`[Nano] RPC ${RPC_URL} attempt ${attempt}/${RPC_RETRIES} failed:`, err.message);
+    }
+    try {
+      return await callRpcEndpoint(FALLBACK_RPC_URL, body, headers);
+    } catch (err) {
+      if (err instanceof RpcSemanticError) throw new Error(err.message);
+      console.warn(`[Nano] Fallback RPC ${FALLBACK_RPC_URL} attempt ${attempt}/${RPC_RETRIES} failed:`, err.message);
     }
   }
   throw lastError || new Error("All RPC attempts failed");
