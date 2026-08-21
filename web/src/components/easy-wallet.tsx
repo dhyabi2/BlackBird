@@ -1,7 +1,7 @@
 "use client";
 
 import "@/lib/polyfills";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import {
   deriveLegacyAccount,
@@ -389,16 +389,27 @@ export default function EasyWallet() {
   // one of the pools but the commitment never went out. Select that
   // denomination and enable "Shield now" so the flow can resume.
   const [resumeReady, setResumeReady] = useState(false);
+  // Funds the balance number can never show: a shield (finished or not)
+  // sitting inside the privacy pool. Rendered as a persistent banner so a
+  // refresh mid-flow never looks like lost money.
+  const [inPool, setInPool] = useState<{ raw: string; state: "unfinished" | "indexing" | "ready" } | null>(null);
+  // Frontier hash currently being auto-healed (commitment on-chain but never
+  // submitted to the indexer) — prevents duplicate heals across effect re-runs.
+  const commitHealRef = useRef<string | null>(null);
   useEffect(() => {
     if (!source || !sourceInfo?.frontier || depositDone || busy) return;
     let alive = true;
     (async () => {
       try {
-        const blocks = (await apiPost("/api/blocks_info", { hashes: [sourceInfo.frontier] }).catch(() => null)) as
-          | Record<string, { amount?: string; contents?: { link?: string } }>
+        const frontier = sourceInfo.frontier!;
+        const blocks = (await apiPost("/api/blocks_info", { hashes: [frontier] }).catch(() => null)) as
+          | Record<string, { amount?: string; contents?: { link?: string; previous?: string } }>
           | null;
-        const fb = blocks?.[sourceInfo.frontier!];
+        const fb = blocks?.[frontier];
         if (!alive || !fb?.contents?.link) return;
+
+        // Case 1: the frontier is a deposit into a pool — the commitment
+        // never went out. Enable "Shield now" to resume.
         for (const denom of ALLOWED_DENOMINATIONS) {
           if (fb.amount !== denom) continue;
           const poolData = await apiGet(`/api/pool_address/${denom}`).catch(() => null);
@@ -407,6 +418,7 @@ export default function EasyWallet() {
             setDenomRaw(String(denom));
             setDenomManuallyChanged(true);
             setResumeReady(true);
+            setInPool({ raw: String(denom), state: "unfinished" });
             const hasCommitDust = BigInt(balance ?? "0") >= BigInt(1);
             if (hasCommitDust) {
               setStatusMessage(
@@ -422,6 +434,58 @@ export default function EasyWallet() {
               log(
                 `Unfinished ${nano(BigInt(denom))} XNO shield detected, but no balance remains for the commitment. Manual recovery required — do not send more funds to this address.`
               );
+            }
+            return;
+          }
+        }
+
+        // Case 2: the frontier is the 1-raw commitment and its previous block
+        // is the deposit — both are on-chain, but the app died before telling
+        // the indexer. Resubmit the pair automatically.
+        if (fb.amount === "1" && fb.contents.previous) {
+          const depositHash = fb.contents.previous;
+          const prevBlocks = (await apiPost("/api/blocks_info", { hashes: [depositHash] }).catch(() => null)) as
+            | Record<string, { amount?: string; contents?: { link?: string } }>
+            | null;
+          const db = prevBlocks?.[depositHash];
+          if (!alive || !db?.contents?.link) return;
+          for (const denom of ALLOWED_DENOMINATIONS) {
+            if (db.amount !== denom) continue;
+            const poolData = await apiGet(`/api/pool_address/${denom}`).catch(() => null);
+            if (!alive || !poolData) return;
+            const poolKeys = [
+              String(poolData.pool_pubkey),
+              ...((poolData.legacy_pubkeys as string[] | undefined) ?? []),
+            ].map((k) => k.toLowerCase());
+            if (!poolKeys.includes(db.contents.link.toLowerCase())) continue;
+            const cHex = fb.contents.link!.toLowerCase();
+            const status = (await apiGet(`/api/deposit_status?commitment=${cHex}`).catch(() => null)) as {
+              indexed?: boolean;
+            } | null;
+            if (!alive) return;
+            // Already indexed → the shield-recovery effect below handles it.
+            if (status?.indexed) return;
+            if (commitHealRef.current === frontier) return;
+            commitHealRef.current = frontier;
+            setDenomRaw(String(denom));
+            setDenomManuallyChanged(true);
+            setInPool({ raw: String(denom), state: "indexing" });
+            setStatusMessage("Found your on-chain shield deposit that the indexer missed. Submitting it now...");
+            log(`On-chain deposit/commit pair found (${depositHash.slice(0, 16)}...); resubmitting to the indexer.`);
+            try {
+              await waitForConfirmation([depositHash, frontier]);
+              await submitDepositWithRetry(depositHash, frontier, setStatusMessage);
+              if (!alive) return;
+              log("Indexer accepted the recovered deposit.");
+              setDepositTx({ depositHash, commitHash: frontier });
+              setDepositDone(true);
+              setStatusMessage("Waiting for your shield to be indexed...");
+              startDepositStatusPolling(cHex);
+            } catch (err) {
+              commitHealRef.current = null; // allow a retry on the next refresh
+              const msg = err instanceof Error ? err.message : String(err);
+              setStatusMessage(`Could not resubmit your shield to the indexer: ${msg}. Refresh to retry.`);
+              log(`ERROR: Shield resubmission failed: ${msg}`);
             }
             return;
           }
@@ -478,6 +542,7 @@ export default function EasyWallet() {
             setDenomManuallyChanged(true);
             setDepositDone(true);
             setWithdrawReady(true);
+            setInPool({ raw: String(denom), state: "ready" });
             setStatusMessage(`Existing ${nano(BigInt(denom))} XNO shield found. You can send privately now.`);
             log(`Recovered existing ${nano(BigInt(denom))} XNO shield from indexer${legacy ? " (legacy derivation)" : ""}.`);
             return;
@@ -898,6 +963,7 @@ export default function EasyWallet() {
         if (typeof existing.epoch === "number") setEpoch(existing.epoch);
         setDepositDone(true);
         setWithdrawReady(true);
+        setInPool({ raw: String(effectiveDenom), state: "ready" });
         setStatusMessage("Shield already active. You can send now.");
         return;
       }
@@ -989,6 +1055,7 @@ export default function EasyWallet() {
       log("Indexer accepted deposit.");
       setDepositTx({ depositHash, commitHash: commitBlock.hash });
       setDepositDone(true);
+      setInPool({ raw: denom.toString(), state: "indexing" });
       setStatusMessage("Waiting for your shield to be indexed...");
       startDepositStatusPolling(C_hex);
     } catch (err) {
@@ -1013,6 +1080,7 @@ export default function EasyWallet() {
         if (status.indexed) {
           clearInterval(id);
           setWithdrawReady(true);
+          setInPool((p) => (p ? { ...p, state: "ready" } : p));
           setStatusMessage("Shield complete. You can send now.");
           log(`Shield indexed at leaf ${status.leaf_index ?? "?"}`);
         } else if (attempts >= maxAttempts) {
@@ -1147,6 +1215,8 @@ export default function EasyWallet() {
       setWithdrawReady(false);
       setDepositDone(false);
       setDepositTx(null);
+      setResumeReady(false);
+      setInPool(null);
       setStatusMessage("Private send complete.");
     } catch (err) {
       setStatusMessage(null);
@@ -1291,6 +1361,16 @@ export default function EasyWallet() {
           ))}
         </select>
       </div>
+
+      {inPool && (
+        <div className="mt-4 rounded-lg border border-black/10 bg-black/5 px-4 py-3 text-sm text-black">
+          <span className="font-semibold">{nano(BigInt(inPool.raw))} XNO in the privacy pool</span>
+          {inPool.state === "unfinished" &&
+            " — unfinished shield: press “Shield now” to complete it (no extra funds needed)."}
+          {inPool.state === "indexing" && " — waiting for the indexer to record your shield."}
+          {inPool.state === "ready" && " — shielded and ready to send privately."}
+        </div>
+      )}
 
       {statusMessage && !activeAction && (
         <div className="mt-4 rounded-lg border border-black/10 bg-black/5 px-4 py-3 text-sm text-black">
