@@ -98,13 +98,17 @@ def blocks_info(hashes: list) -> dict:
     return out
 
 
-def pool_deposit_hashes(address: str) -> set:
-    """All deposit send hashes into a pool account: links of its receive
-    blocks plus everything still receivable."""
-    deposits = set()
+def account_block_hashes(address: str, subtype: str) -> list:
+    """Hashes of an account's blocks matching subtype ('receive'/'send').
+
+    rpc.nano.to's keyed account_history strips raw fields (no link/subtype),
+    so only the hash and coarse type are trusted from history; links come
+    from blocks_info afterwards.
+    """
+    hashes = []
     head = None
     while True:
-        params = {"account": address, "count": 500, "raw": "true"}
+        params = {"account": address, "count": "500", "raw": "true"}
         if head:
             params["head"] = head
         try:
@@ -117,13 +121,26 @@ def pool_deposit_hashes(address: str) -> set:
         if isinstance(history, str) or not history:
             break
         for entry in history:
-            if entry.get("subtype") == "receive" or entry.get("type") == "receive":
-                link = entry.get("link") or ""
-                if len(link) == 64:
-                    deposits.add(link.upper())
+            kind = entry.get("subtype") or entry.get("type")
+            if kind == subtype and len(entry.get("hash") or "") == 64:
+                hashes.append(entry["hash"])
         head = data.get("previous")
         if not head:
             break
+    return hashes
+
+
+def pool_deposit_hashes(address: str) -> set:
+    """All deposit send hashes into a pool account: links of its receive
+    blocks plus everything still receivable."""
+    deposits = set()
+    receive_hashes = account_block_hashes(address, "receive")
+    for h, info in blocks_info(receive_hashes).items():
+        c = info.get("contents") or {}
+        link = (c.get("link") or "").upper()
+        # The receive block is self-certifying; its link is the deposit send.
+        if len(link) == 64 and verify_block_locally(h, info):
+            deposits.add(link)
     try:
         pending = rpc.call(
             "receivable", {"account": address, "count": 500, "source": "true"}
@@ -198,38 +215,15 @@ def derive_commitments(pool_keys: dict, unverified: list) -> dict:
 def derive_nullifiers(anchor_account: str, unverified: list) -> set:
     """Nullifiers from the anchor account's 1-raw sends (link = nullifier)."""
     nullifiers = set()
-    head = None
-    while True:
-        params = {"account": anchor_account, "count": 500, "raw": "true"}
-        if head:
-            params["head"] = head
-        try:
-            data = rpc.call("account_history", params)
-        except Exception as e:
-            if "not found" in str(e).lower():
-                break
-            raise
-        history = data.get("history", []) or []
-        if isinstance(history, str) or not history:
-            break
-        hashes = [
-            e["hash"]
-            for e in history
-            if (e.get("subtype") == "send" or e.get("type") == "send")
-            and len(e.get("hash") or "") == 64
-        ]
-        infos = blocks_info(hashes)
-        for h, info in infos.items():
-            c = info.get("contents") or {}
-            if info.get("confirmed") != "true" or int(info.get("amount", 0) or 0) != 1:
-                continue
-            if not verify_block_locally(h, info):
-                unverified.append(h)
-                continue
-            nullifiers.add(int(c["link"], 16))
-        head = data.get("previous")
-        if not head:
-            break
+    send_hashes = account_block_hashes(anchor_account, "send")
+    for h, info in blocks_info(send_hashes).items():
+        c = info.get("contents") or {}
+        if info.get("confirmed") != "true" or int(info.get("amount", 0) or 0) != 1:
+            continue
+        if not verify_block_locally(h, info):
+            unverified.append(h)
+            continue
+        nullifiers.add(int(c["link"], 16))
     return nullifiers
 
 
