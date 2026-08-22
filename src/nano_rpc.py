@@ -18,7 +18,13 @@ import requests
 from requests.adapters import HTTPAdapter
 
 
-DEFAULT_RPC_URLS = ["https://rpc.nano.to"]
+# rpc.nano.to is the PRIMARY and only keyed endpoint. rpc.nano-gpt.com is the
+# SOLE permitted fallback (owner policy, shared with holdergame): keyless,
+# tried only when nano.to does not answer (transport failure/timeout). The API
+# key is never sent to the fallback.
+PRIMARY_RPC_URL = "https://rpc.nano.to"
+FALLBACK_RPC_URL = "https://rpc.nano-gpt.com"
+DEFAULT_RPC_URLS = [PRIMARY_RPC_URL, FALLBACK_RPC_URL]
 
 # Nano errors that are valid ledger answers, not endpoint failures.
 _NANO_ERRORS = (
@@ -88,15 +94,6 @@ class NanoRPC:
 
     def call(self, action: str, params: dict) -> dict:
         """Call a Nano RPC action, trying endpoints and retries."""
-        payload = {"action": action, **params}
-        # rpc.nano.to accepts the key in the body or as an Authorization header.
-        if self.api_key:
-            payload["key"] = self.api_key
-
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = self.api_key
-
         last_err = None
 
         for attempt in range(1, self.retries + 1):
@@ -106,6 +103,14 @@ class NanoRPC:
             ]
             for idx in order:
                 endpoint = self.endpoints[idx]
+                # The API key belongs to rpc.nano.to ONLY — never sent to the
+                # fallback (rpc.nano.to accepts it in body or header).
+                use_key = bool(self.api_key) and endpoint == PRIMARY_RPC_URL
+                payload = {"action": action, **params}
+                headers = {"Content-Type": "application/json"}
+                if use_key:
+                    payload["key"] = self.api_key
+                    headers["Authorization"] = self.api_key
                 try:
                     resp = self.session.post(
                         endpoint,

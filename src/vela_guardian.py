@@ -25,7 +25,9 @@ from .vela_crypto import (
     pool_address,
     pool_pubkey,
     nano_pubkey_from_address,
+    nano_address_from_pubkey,
     nano_state_block_hash,
+    nullifier_anchor_keypair,
     sign_message,
 )
 from .frost_signer import FrostSigner, frost_enabled
@@ -66,9 +68,15 @@ class VelaGuardian:
         self.spent_nullifiers: set = set()
         # Nullifiers that have been signed but not yet broadcast.
         self.pending_withdrawals: dict = {}
+        # Spent nullifiers not yet anchored on-chain (see nullifier_anchor_loop).
+        self.unanchored_nullifiers: set = set()
         self._lock = threading.Lock()
         self._frost_signers: dict = {}
+        self.anchor_sk, self.anchor_pub = nullifier_anchor_keypair(seed)
+        self.anchor_address = nano_address_from_pubkey(self.anchor_pub)
         self._load_state()
+        print(f"nullifier anchor account: {self.anchor_address} "
+              f"(fund with a little XNO to activate on-chain anchoring; 1 raw per withdrawal)")
 
     def _frost_signer(self, denomination: int) -> FrostSigner:
         signer = self._frost_signers.get(denomination)
@@ -99,6 +107,12 @@ class VelaGuardian:
                 self.pending_withdrawals = {
                     int(k, 16): v for k, v in data.get("pending", {}).items()
                 }
+                if "unanchored" in data:
+                    self.unanchored_nullifiers = set(int(x, 16) for x in data["unanchored"])
+                else:
+                    # First run with anchoring: backfill every known spent
+                    # nullifier so history gets anchored once the account is funded.
+                    self.unanchored_nullifiers = set(self.spent_nullifiers)
             except Exception as e:
                 print("Guardian load state error:", e)
 
@@ -111,6 +125,7 @@ class VelaGuardian:
             with os.fdopen(fd, "w") as f:
                 state = {
                     "nullifiers": [hex(x) for x in self.spent_nullifiers],
+                    "unanchored": [hex(x) for x in self.unanchored_nullifiers],
                     "pending": {
                         hex(k): v for k, v in self.pending_withdrawals.items()
                     },
@@ -126,36 +141,41 @@ class VelaGuardian:
             raise
 
     RECEIVE_THRESHOLD = 0xFFFFFE0000000000
+    SEND_THRESHOLD = 0xFFFFFFF800000000
     ZERO_32 = b"\x00" * 32
 
-    def _generate_receive_work(self, root: bytes) -> str:
-        """Proof-of-work at the receive threshold.
+    def _generate_work(self, root: bytes, threshold: int) -> str:
+        """Proof-of-work at the given threshold.
 
         Primary: the remote RPC work service (validated locally). Fallback:
-        CPU search (~10-60s). Returns the 16-char big-endian hex work value;
-        the hash input uses the little-endian byte order per the protocol.
+        CPU search. Returns the 16-char big-endian hex work value; the hash
+        input uses the little-endian byte order per the protocol.
         """
         import hashlib
 
         from .work_service import validate_work
 
+        diff_hex = format(threshold, "016x")
         try:
             result = self.rpc.call("work_generate", {
-                "hash": root.hex(), "difficulty": "fffffe0000000000",
+                "hash": root.hex(), "difficulty": diff_hex,
             })
             work = (result.get("work") or "").strip()
-            if work and validate_work(work, root.hex(), "fffffe0000000000"):
+            if work and validate_work(work, root.hex(), diff_hex):
                 return work
         except Exception as e:
-            print("receive work via RPC failed, falling back to CPU:", e)
+            print("work via RPC failed, falling back to CPU:", e)
 
         value = int.from_bytes(secrets.token_bytes(8), "little")
         while True:
             wb = value.to_bytes(8, "little")
             digest = hashlib.blake2b(wb + root, digest_size=8).digest()
-            if int.from_bytes(digest, "little") >= self.RECEIVE_THRESHOLD:
+            if int.from_bytes(digest, "little") >= threshold:
                 return value.to_bytes(8, "big").hex()
             value = (value + 1) & 0xFFFFFFFFFFFFFFFF
+
+    def _generate_receive_work(self, root: bytes) -> str:
+        return self._generate_work(root, self.RECEIVE_THRESHOLD)
 
     def receive_pool_pending(self, denomination: int, max_blocks: int = 20) -> int:
         """Receive pending sends into the pool account for a denomination.
@@ -230,6 +250,111 @@ class VelaGuardian:
                     self.receive_pool_pending(denom)
                 except Exception as e:
                     print("pool receive loop error:", e)
+            time.sleep(interval)
+
+    # ------------------------------------------------------------------
+    # Nullifier anchoring (pattern from the holdergame trustless roadmap):
+    # the spent-nullifier set is the ONLY custody state not derivable from
+    # chain data — losing it allows double-spends. Each spent nullifier is
+    # therefore anchored on-chain as a 1-raw send from a dedicated anchor
+    # account whose link IS the nullifier. scripts/rebuild_indexer.py
+    # recovers the set from the anchor account's chain (boot-from-nothing).
+    # Dormant until the anchor account is funded; withdrawals never wait on it.
+    # ------------------------------------------------------------------
+
+    def _anchor_receive_pending(self, previous: bytes, balance: int, rep_addr: str) -> tuple:
+        """Receive any funding sent to the anchor account. Returns the updated
+        (previous, balance, rep_addr)."""
+        pending = self.rpc.call("receivable", {"account": self.anchor_address, "count": "10", "source": "true"})
+        blocks = pending.get("blocks") or {}
+        if not isinstance(blocks, dict):
+            return previous, balance, rep_addr
+        for send_hash, meta in blocks.items():
+            amount = int(meta["amount"] if isinstance(meta, dict) else meta)
+            new_balance = balance + amount
+            is_open = previous == self.ZERO_32
+            rep = self.anchor_address if is_open else rep_addr
+            rep_pub = nano_pubkey_from_address(rep)
+            block_hash = nano_state_block_hash(
+                self.anchor_pub, previous, rep_pub, new_balance, bytes.fromhex(send_hash)
+            )
+            work_root = self.anchor_pub if is_open else previous
+            block = {
+                "type": "state",
+                "account": self.anchor_address,
+                "previous": previous.hex(),
+                "representative": rep,
+                "balance": str(new_balance),
+                "link": send_hash,
+                "signature": self.anchor_sk.sign(block_hash).hex(),
+                "work": self._generate_work(work_root, self.RECEIVE_THRESHOLD),
+            }
+            result = self.rpc.call("process", {"json_block": "true", "subtype": "receive", "block": block})
+            if result.get("error"):
+                print("anchor receive rejected:", result["error"])
+                break
+            previous, balance, rep_addr = block_hash, new_balance, rep
+            print(f"anchor account received {amount} raw ({result.get('hash')})")
+        return previous, balance, rep_addr
+
+    def anchor_pending_nullifiers(self, max_per_pass: int = 10) -> int:
+        """Anchor queued nullifiers on-chain. Returns how many were anchored."""
+        with self._lock:
+            queue = sorted(self.unanchored_nullifiers)[:max_per_pass]
+        info = self._get_account_info(self.anchor_address)
+        if info.get("error") == "Account not found":
+            previous, balance, rep_addr = self.ZERO_32, 0, self.anchor_address
+        elif "error" in info:
+            print("anchor: account_info error:", info["error"])
+            return 0
+        else:
+            previous = bytes.fromhex(info["frontier"])
+            balance = int(info["balance"])
+            rep_addr = info["representative"]
+
+        previous, balance, rep_addr = self._anchor_receive_pending(previous, balance, rep_addr)
+        if not queue:
+            return 0
+        if previous == self.ZERO_32 or balance < 1:
+            return 0  # dormant until funded
+
+        anchored = 0
+        rep_pub = nano_pubkey_from_address(rep_addr)
+        for N in queue:
+            if balance < 1:
+                print("anchor account out of funds; top it up to resume anchoring")
+                break
+            link = N.to_bytes(32, "big")
+            new_balance = balance - 1
+            block_hash = nano_state_block_hash(self.anchor_pub, previous, rep_pub, new_balance, link)
+            block = {
+                "type": "state",
+                "account": self.anchor_address,
+                "previous": previous.hex(),
+                "representative": rep_addr,
+                "balance": str(new_balance),
+                "link": link.hex(),
+                "signature": self.anchor_sk.sign(block_hash).hex(),
+                "work": self._generate_work(previous, self.SEND_THRESHOLD),
+            }
+            result = self.rpc.call("process", {"json_block": "true", "subtype": "send", "block": block})
+            if result.get("error"):
+                print("anchor send rejected:", result["error"])
+                break
+            previous, balance = block_hash, new_balance
+            with self._lock:
+                self.unanchored_nullifiers.discard(N)
+            self._save_state()
+            anchored += 1
+            print(f"anchored nullifier {hex(N)[:18]}... ({result.get('hash')})")
+        return anchored
+
+    def nullifier_anchor_loop(self, interval: int = 60):
+        while True:
+            try:
+                self.anchor_pending_nullifiers()
+            except Exception as e:
+                print("nullifier anchor loop error:", e)
             time.sleep(interval)
 
     def _indexer_get(self, path: str) -> dict:
@@ -457,6 +582,9 @@ class VelaGuardian:
 
             # Only mark spent after a successful broadcast.
             self.spent_nullifiers.add(N)
+            # Queue the on-chain anchor (nullifier_anchor_loop drains this);
+            # never blocks or fails the withdrawal itself.
+            self.unanchored_nullifiers.add(N)
             broadcast_hash = pending.get("block_hash", "")
             self.pending_withdrawals.pop(N, None)
             self._save_state()
@@ -477,7 +605,11 @@ def create_app(guardian: VelaGuardian) -> Flask:
 
     @app.route("/")
     def health():
-        return jsonify({"status": "ok"})
+        return jsonify({
+            "status": "ok",
+            "anchor_account": guardian.anchor_address,
+            "unanchored_nullifiers": len(guardian.unanchored_nullifiers),
+        })
 
     @app.route("/pool_address")
     def pool_address_route():
@@ -527,5 +659,6 @@ if __name__ == "__main__":
     seed = bytes.fromhex(seed_hex)
     guardian = VelaGuardian(seed)
     threading.Thread(target=guardian.pool_receive_loop, daemon=True).start()
+    threading.Thread(target=guardian.nullifier_anchor_loop, daemon=True).start()
     app = create_app(guardian)
     serve(app, host="127.0.0.1", port=8081)

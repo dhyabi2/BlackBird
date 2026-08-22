@@ -324,6 +324,18 @@ def pool_address(denomination: int, seed: Optional[bytes] = None) -> str:
     return nano_address_from_pubkey(pool_pubkey(denomination, seed))
 
 
+def nullifier_anchor_keypair(seed: bytes) -> Tuple[ed25519_blake2b.SigningKey, bytes]:
+    """Single-key account used only to ANCHOR spent nullifiers on-chain as
+    1-raw sends whose link is the nullifier (pattern from the holdergame
+    trustless roadmap: irrecoverable off-chain state gets an on-chain anchor).
+    Deterministic from the guardian seed so it survives with the seed backup.
+    It never holds pool funds: a leaked anchor key can freeze rebuilt state
+    with fake spent-marks, but can never double-spend or move custody funds."""
+    priv = hashlib.blake2b(seed + b"vela-nullifier-anchor-v1", digest_size=32).digest()
+    sk = ed25519_blake2b.SigningKey(priv)
+    return sk, sk.get_verifying_key().to_bytes()
+
+
 def protocol_data_account() -> str:
     return nano_address_from_pubkey(hash_to_edwards(DOMAIN_STEALTH + PROTOCOL_TAG))
 
