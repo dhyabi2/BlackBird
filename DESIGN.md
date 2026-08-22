@@ -48,7 +48,8 @@ The protocol removes single-party trust from custody and indexing:
 | Pool custody | `t-of-n` FROST threshold signing over Ed25519-blake2b. No single guardian holds the full key. |
 | Merkle root computation | Deterministic, replicated across independent indexers; roots published on-chain and served via API. |
 | Proof verification | Deterministic Groth16 verification inside each guardian. |
-| Nullifier tracking | Replicated nullifier set; double-spends rejected by any honest guardian. |
+| Nullifier tracking | Replicated nullifier set; double-spends rejected by any honest guardian. Each spent nullifier is additionally anchored on-chain (1-raw send, `link` = nullifier), so the set survives total server loss. |
+| State durability | All state except FROST key shares is derivable from public chain data (`scripts/rebuild_indexer.py`); servers hold caches, the ledger is the database. |
 | Network transport | Public internet or Tor hidden services; no private networks. |
 
 Remaining assumptions:
@@ -185,6 +186,42 @@ A client determines the canonical root for an epoch/denomination by:
 4. Recomputing the root independently from public Nano data and verifying it matches.
 
 If roots disagree, the client waits for more RootCommit transactions or recomputes the root itself from the ledger. Because root computation is deterministic, any divergence is attributable to a faulty or malicious indexer.
+
+### Deployed: chain-derived state recovery ("replay is truth")
+
+Everything except the FROST key shares is derivable from public chain data
+(2026-08-22; pattern adapted from the holdergame trustless roadmap). The
+indexer's database is a cache of the ledger, not a source of truth:
+
+- **Commitments are replayed from chain.** `scripts/rebuild_indexer.py`
+  reconstructs every commitment set with zero secrets: pool-account receive
+  blocks → deposit send hashes → the commitment block chained directly after
+  each deposit on the depositor's own account. Every fetched block is
+  verified locally (state-block hash recomputed, ed25519-blake2b signature
+  checked against the block's own account), so an untrusted RPC endpoint can
+  omit data but never forge it. Because tree leaves are the sorted commitment
+  set, a rebuild reproduces the production Merkle roots byte-for-byte.
+- **Nullifiers are anchored on-chain.** The spent-nullifier set is the one
+  piece of custody state a withdrawal block does not reveal (its link is the
+  destination, not the nullifier). The guardian therefore anchors each spent
+  nullifier as a 1-raw send from a dedicated, seed-derived anchor account
+  whose `link` is the nullifier. Anchoring is asynchronous and never blocks
+  or delays a withdrawal; the queue drains once the anchor account is funded
+  (1 raw per anchor). `rebuild_indexer.py --anchor-account` recovers the set
+  from that account's chain. Residual trust: a leaked anchor key can freeze
+  rebuilt state with fake spent-marks, but can never double-spend or move
+  pool funds.
+- **Verification is permissionless.** `rebuild_indexer.py` run without flags
+  diffs the chain-derived state against a state file, and `--roots-url`
+  diffs recomputed Poseidon roots against a live indexer — anyone can audit
+  the indexer for corruption, censorship, or invented state without secrets
+  or operator cooperation.
+
+Known limits: the epoch of a deposit is derived from the RPC node's
+`local_timestamp`, which is not consensus data — a rebuild through a
+different node can shift a boundary deposit by one epoch. Commitments
+deposited to pool keys that predate the recorded `legacy_pubkeys` (retired
+pre-migration test pools) are not derivable and are excluded by design.
 
 ---
 
@@ -548,6 +585,21 @@ The target is sub-second proof generation on a commodity laptop and a path to br
 2. The indexer needs no key material.
 3. Indexers publish roots via API and optionally on-chain.
 
+### State recovery (boot-from-nothing)
+
+After total server loss, a new deployment is recovered from the chain plus
+the guardian seed backup:
+
+1. Restore FROST key shares (and the guardian seed) from operator backups —
+   keys are the only state that cannot be replayed from chain.
+2. `python -m scripts.rebuild_indexer --rebuild data/indexer_state.json
+   --anchor-account <anchor nano_ address>` reconstructs all commitment sets
+   and the spent-nullifier set from public chain data.
+3. Merge the recovered nullifiers into `guardian_state.json` before serving
+   withdrawals — serving without them allows double-spends.
+4. Routine audit: run `rebuild_indexer.py` (verify mode) against the live
+   state to detect corruption or censorship at any time.
+
 ### Client setup
 
 1. The client needs a list of guardian and indexer endpoints.
@@ -563,7 +615,11 @@ A production Next.js web client lives in `web/` and is designed to deploy on Ver
   indexer, guardian coordinator, and prover; two cosigner VPSes in separate
   regions each hold a FROST key share and independently re-verify every
   block (and withdrawal proof) before contributing a signature share.
-- **rpc.nano.to** provides server-side Nano RPC access via `NANO_RPC_KEY`.
+- **rpc.nano.to** provides server-side Nano RPC access via `NANO_RPC_KEY`
+  (primary and only keyed endpoint); **rpc.nano-gpt.com** is the sole
+  permitted fallback, keyless, used only when rpc.nano.to does not answer.
+  The same policy applies in the Python backend (`src/nano_rpc.py`) and the
+  web tier (`web/src/lib/nano-rpc.ts`).
 
 Key API routes:
 
