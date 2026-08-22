@@ -396,6 +396,14 @@ export default function EasyWallet() {
   // Frontier hash currently being auto-healed (commitment on-chain but never
   // submitted to the indexer) — prevents duplicate heals across effect re-runs.
   const commitHealRef = useRef<string | null>(null);
+  // Auto-pilot: the pipeline advances itself (fund → shield → index → private
+  // send). After any failure it pauses instead of hot-looping the broken step;
+  // the Retry button clears the pause. The refs make the handlers re-entrant
+  // safe — effects can fire before the `busy` state commit is visible.
+  const [autoPaused, setAutoPaused] = useState(false);
+  const [flowError, setFlowError] = useState<string | null>(null);
+  const depositRunningRef = useRef(false);
+  const withdrawRunningRef = useRef(false);
   useEffect(() => {
     if (!source || !sourceInfo?.frontier || depositDone || busy) return;
     let alive = true;
@@ -422,13 +430,16 @@ export default function EasyWallet() {
             const hasCommitDust = BigInt(balance ?? "0") >= BigInt(1);
             if (hasCommitDust) {
               setStatusMessage(
-                `Unfinished ${nano(BigInt(denom))} XNO shield found. No extra funds needed — press "Shield now" to complete it.`
+                `Unfinished ${nano(BigInt(denom))} XNO shield found — completing it automatically (no extra funds needed).`
               );
               log(
-                `Unfinished ${nano(BigInt(denom))} XNO shield detected. Press "Shield now" to finish it (no extra funds needed).`
+                `Unfinished ${nano(BigInt(denom))} XNO shield detected; resuming automatically.`
               );
             } else {
-              setStatusMessage(
+              // Dead end the pipeline must never auto-touch: retrying would
+              // throw, and a new receive would break the deposit chain.
+              setAutoPaused(true);
+              setFlowError(
                 `Unfinished ${nano(BigInt(denom))} XNO shield found, but the shield address has no balance left for the commitment. Do NOT send more funds here — contact support for manual recovery.`
               );
               log(
@@ -543,7 +554,7 @@ export default function EasyWallet() {
             setDepositDone(true);
             setWithdrawReady(true);
             setInPool({ raw: String(denom), state: "ready" });
-            setStatusMessage(`Existing ${nano(BigInt(denom))} XNO shield found. You can send privately now.`);
+            setStatusMessage(`Existing ${nano(BigInt(denom))} XNO shield found — completing the private send automatically.`);
             log(`Recovered existing ${nano(BigInt(denom))} XNO shield from indexer${legacy ? " (legacy derivation)" : ""}.`);
             return;
           }
@@ -874,10 +885,14 @@ export default function EasyWallet() {
 
   async function handleDeposit() {
     if (!source || !withdraw || !sourceInfo) return;
+    if (depositRunningRef.current) return;
+    depositRunningRef.current = true;
     setBusy(true);
     setActiveAction("deposit");
     setStatusMessage("Preparing deposit...");
     setWithdrawReady(false);
+    setFlowError(null);
+    setWithdrawTx(null); // a fresh cycle replaces the previous run's result
     try {
       const denom = BigInt(effectiveDenom);
       const required = denom + BigInt(1);
@@ -1060,8 +1075,12 @@ export default function EasyWallet() {
       startDepositStatusPolling(C_hex);
     } catch (err) {
       setStatusMessage(null);
-      log(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`ERROR: ${msg}`);
+      setFlowError(`Shielding failed: ${msg}`);
+      setAutoPaused(true);
     } finally {
+      depositRunningRef.current = false;
       setBusy(false);
       setActiveAction(null);
     }
@@ -1081,7 +1100,7 @@ export default function EasyWallet() {
           clearInterval(id);
           setWithdrawReady(true);
           setInPool((p) => (p ? { ...p, state: "ready" } : p));
-          setStatusMessage("Shield complete. You can send now.");
+          setStatusMessage("Shield complete — sending privately now...");
           log(`Shield indexed at leaf ${status.leaf_index ?? "?"}`);
         } else if (attempts >= maxAttempts) {
           clearInterval(id);
@@ -1095,8 +1114,11 @@ export default function EasyWallet() {
 
   async function handleWithdraw() {
     if (!source || !withdraw || !epoch) return;
+    if (withdrawRunningRef.current) return;
+    withdrawRunningRef.current = true;
     setBusy(true);
     setActiveAction("withdraw");
+    setFlowError(null);
     setStatusMessage("Generating zero-knowledge proof...");
     // The withdrawal block's work root is the pool frontier — warm it while
     // the proof generates so the work step is near-instant.
@@ -1220,12 +1242,55 @@ export default function EasyWallet() {
       setStatusMessage("Private send complete.");
     } catch (err) {
       setStatusMessage(null);
-      log(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`ERROR: ${msg}`);
+      setFlowError(`Private send failed: ${msg}`);
+      setAutoPaused(true);
     } finally {
+      withdrawRunningRef.current = false;
       setBusy(false);
       setActiveAction(null);
     }
   }
+
+  // Auto-pilot: whenever a resolvable state is detected, run the step that
+  // resolves it. Fund arrival (or a resumable half-shield) triggers the
+  // shield; an indexed shield triggers the private send. Every trigger is
+  // idempotent: the handlers guard against re-entry, and a failure sets
+  // autoPaused so this never hot-loops a broken step.
+  useEffect(() => {
+    if (view !== "dashboard" || busy || autoPaused) return;
+    if (!source || !withdraw || !sourceInfo) return;
+    let action: (() => Promise<void>) | null = null;
+    if (!depositDone) {
+      if (!greenlight?.ok) return;
+      const total = BigInt(balance ?? "0") + BigInt(pendingRaw ?? "0");
+      const canShield = total >= BigInt(effectiveDenom) + BigInt(1);
+      const canResume = resumeReady && BigInt(balance ?? "0") >= BigInt(1);
+      if (canShield || canResume) action = handleDeposit;
+    } else if (withdrawReady && epoch) {
+      action = handleWithdraw;
+    }
+    if (!action) return;
+    const run = action;
+    const timer = setTimeout(() => void run(), 0);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    view,
+    busy,
+    autoPaused,
+    greenlight?.ok,
+    depositDone,
+    withdrawReady,
+    epoch,
+    resumeReady,
+    balance,
+    pendingRaw,
+    effectiveDenom,
+    source?.address,
+    sourceInfo?.frontier,
+  ]);
 
   const fundAmountRaw = useMemo(
     () => BigInt(effectiveDenom) + WALLET_FRIENDLY_PADDING_RAW,
@@ -1258,23 +1323,6 @@ export default function EasyWallet() {
 
   const inputClass =
     "w-full rounded-lg border border-black/20 bg-white px-4 py-2 text-black focus:border-black focus:outline-none";
-
-  function stepClasses(step: number) {
-    const isActive = activeStep === step;
-    const isCompleted = completedStep >= step;
-    return [
-      "flex items-start gap-3 rounded-xl border bg-white p-4 transition-opacity sm:gap-4 sm:p-5",
-      isActive || isCompleted ? "border-black/20" : "border-black/10 opacity-60",
-    ].join(" ");
-  }
-  function stepNumClasses(step: number) {
-    const isActive = activeStep === step;
-    const isCompleted = completedStep >= step;
-    return [
-      "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-sm font-semibold",
-      isCompleted ? "border-black bg-black text-white" : isActive ? "border-black text-black" : "border-black/20 text-black/50",
-    ].join(" ");
-  }
 
   if (view === "create") {
     return (
@@ -1326,15 +1374,18 @@ export default function EasyWallet() {
   const hasFunds = Boolean(BigInt(totalAvailable) >= BigInt(effectiveDenom) + BigInt(1));
   const hasPending = Boolean(pendingRaw && BigInt(pendingRaw) > 0);
 
-  let activeStep = 1;
-  if (hasFunds || depositDone) activeStep = 2;
-  if (withdrawReady) activeStep = 3;
-  if (busy) activeStep = 0;
-
-  let completedStep = 0;
-  if (hasFunds) completedStep = 1;
-  if (depositDone) completedStep = 2;
-  if (withdrawTx) completedStep = 3;
+  // The single pipeline stage, derived (never stored) from wallet state so a
+  // refresh always lands on the right segment. Precedence runs backwards:
+  // a finished cycle only shows Done while nothing newer is in flight.
+  let stage: 1 | 2 | 3 | 4 | 5;
+  if (withdrawTx && !depositDone && !withdrawReady && !hasFunds && !resumeReady && !busy) stage = 5;
+  else if (withdrawReady || (busy && activeAction === "withdraw")) stage = 4;
+  else if (depositDone || inPool?.state === "indexing") stage = 3;
+  else if (hasFunds || resumeReady || (busy && activeAction === "deposit")) stage = 2;
+  else stage = 1;
+  const pipelineWorking =
+    (busy && activeAction !== "external") || stage === 3 || (stage === 2 && !autoPaused && hasFunds);
+  const STAGE_LABELS = ["Fund", "Shield", "Index", "Private send", "Done"];
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-12">
@@ -1372,13 +1423,6 @@ export default function EasyWallet() {
         </div>
       )}
 
-      {statusMessage && !activeAction && (
-        <div className="mt-4 rounded-lg border border-black/10 bg-black/5 px-4 py-3 text-sm text-black">
-          {busy && <span className="mr-2 inline-block h-3 w-3 animate-spin rounded-full border border-black/30 border-t-black" />}
-          {statusMessage}
-        </div>
-      )}
-
       {greenlight === null && (
         <div className="mt-4 rounded-lg border border-black/10 bg-black/5 px-4 py-3 text-sm text-black">
           <span className="mr-2 inline-block h-3 w-3 animate-spin rounded-full border border-black/30 border-t-black" />
@@ -1411,65 +1455,165 @@ export default function EasyWallet() {
       )}
 
       <div className="mt-6 space-y-4">
-        <div className={stepClasses(1)}>
-          <div className={stepNumClasses(1)}>1</div>
-          <div className="min-w-0 flex-1">
-            <h2 className="font-semibold">Fund your shield address</h2>
-            <p className="text-sm text-black/50">
-              Send exactly <HighlightedAmount amount={depositAmountText} /> to this temporary address.
-            </p>
-            <p className="text-xs text-black/50">
-              The QR amount includes a tiny buffer so mobile wallets display it correctly.
-              The shield only uses {nano(BigInt(effectiveDenom))} XNO + 1 raw; the rest stays as dust in this address.
-            </p>
-            {greenlight?.ok && source && (
-              <div className="mt-4">
-                <div className="flex items-center gap-2">
-                  <code className="min-w-0 flex-1 break-all rounded-lg border border-black/10 bg-black/5 px-3 py-2 font-mono text-xs">{source.address}</code>
-                  <CopyButton text={source.address} />
+        <div className="rounded-xl border border-black/10 bg-white p-4 sm:p-5">
+          <div className="flex gap-1.5">
+            {STAGE_LABELS.map((label, i) => {
+              const n = i + 1;
+              const complete = stage > n || stage === 5;
+              const active = stage === n && stage !== 5;
+              return (
+                <div key={label} className="min-w-0 flex-1">
+                  <div
+                    className={`h-2 rounded-full ${
+                      complete
+                        ? "bg-black"
+                        : active
+                          ? pipelineWorking
+                            ? "animate-pulse bg-black/60"
+                            : "bg-black/60"
+                          : "bg-black/10"
+                    }`}
+                  />
+                  <p
+                    className={`mt-1.5 truncate text-center text-[11px] ${
+                      active ? "font-semibold text-black" : complete ? "text-black/70" : "text-black/40"
+                    }`}
+                  >
+                    {label}
+                  </p>
                 </div>
-                <div className="mt-4 inline-block rounded-lg border border-black/10 bg-white p-4">
-                  {depositUri && <QRCodeSVG value={depositUri} size={160} />}
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <a href={depositUri} className="rounded-lg border border-black/20 px-3 py-2 text-sm hover:bg-black/5">Open in wallet</a>
-                </div>
-                <p className="mt-2 text-xs text-black/50">
-                  Available: {balance ? `${nano(BigInt(balance))} XNO` : "—"}
-                  {hasPending && ` · Pending: ${nano(BigInt(pendingRaw ?? "0"))} XNO`}
-                </p>
-              </div>
-            )}
-            {greenlight?.ok === false && (
-              <p className="mt-4 text-sm text-black/70">The deposit address is hidden until the network check passes.</p>
-            )}
+              );
+            })}
           </div>
+          <p className="mt-3 text-xs text-black/50">
+            Everything after funding runs automatically — receiving, shielding, indexing, and the private send.
+            You can close this page and come back; it picks up where it left off.
+          </p>
         </div>
 
-        <div className={stepClasses(2)}>
-          <div className={stepNumClasses(2)}>2</div>
-          <div className="min-w-0 flex-1">
-            <h2 className="font-semibold">Shield into the pool</h2>
-            <p className="text-sm text-black/50">Move {nano(BigInt(effectiveDenom))} XNO + 1 raw into the privacy pool.</p>
-            {hasPending && !depositDone && (
-              <p className="mt-2 text-sm text-black/70">Funding detected — you can shield now.</p>
-            )}
-            <Button onClick={handleDeposit} disabled={busy || !greenlight?.ok || (!hasFunds && !resumeReady) || depositDone} className="mt-4 w-full">
-              {busy ? "Working..." : depositDone ? "Shielded" : "Shield now"}
-            </Button>
-            {statusMessage && activeAction === "deposit" && (
-              <div className="mt-3 rounded-lg border border-black/10 bg-black/5 px-4 py-3 text-sm text-black">
-                <span className="mr-2 inline-block h-3 w-3 animate-spin rounded-full border border-black/30 border-t-black" />
-                {statusMessage}
-              </div>
-            )}
-            {depositTx && (
-              <div className="mt-3 flex flex-wrap gap-3 text-xs text-black/70">
-                <a href={explorerLink(depositTx.depositHash)} target="_blank" rel="noreferrer" className="underline">Deposit tx</a>
-                <a href={explorerLink(depositTx.commitHash)} target="_blank" rel="noreferrer" className="underline">Commit tx</a>
-              </div>
+        {flowError && (
+          <div className="rounded-xl border border-red-600/30 bg-red-50 p-4 text-sm text-red-800 sm:p-5">
+            <p>{flowError}</p>
+            {!flowError.includes("manual recovery") && (
+              <Button
+                onClick={() => {
+                  setFlowError(null);
+                  setAutoPaused(false);
+                }}
+                variant="secondary"
+                className="mt-3"
+              >
+                Retry
+              </Button>
             )}
           </div>
+        )}
+
+        <div className="rounded-xl border border-black/20 bg-white p-4 sm:p-5">
+          {stage === 1 && (
+            <div>
+              <h2 className="font-semibold">Fund your shield address</h2>
+              <p className="text-sm text-black/50">
+                Send exactly <HighlightedAmount amount={depositAmountText} /> to this temporary address.
+              </p>
+              <p className="text-xs text-black/50">
+                The QR amount includes a tiny buffer so mobile wallets display it correctly.
+                The shield only uses {nano(BigInt(effectiveDenom))} XNO + 1 raw; the rest stays as dust in this address.
+              </p>
+              {greenlight?.ok && source && (
+                <div className="mt-4">
+                  <div className="flex items-center gap-2">
+                    <code className="min-w-0 flex-1 break-all rounded-lg border border-black/10 bg-black/5 px-3 py-2 font-mono text-xs">{source.address}</code>
+                    <CopyButton text={source.address} />
+                  </div>
+                  <div className="mt-4 inline-block rounded-lg border border-black/10 bg-white p-4">
+                    {depositUri && <QRCodeSVG value={depositUri} size={160} />}
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <a href={depositUri} className="rounded-lg border border-black/20 px-3 py-2 text-sm hover:bg-black/5">Open in wallet</a>
+                  </div>
+                  <p className="mt-2 text-xs text-black/50">
+                    Available: {balance ? `${nano(BigInt(balance))} XNO` : "—"}
+                    {hasPending && ` · Pending: ${nano(BigInt(pendingRaw ?? "0"))} XNO`}
+                  </p>
+                </div>
+              )}
+              {greenlight?.ok === false && (
+                <p className="mt-4 text-sm text-black/70">The deposit address is hidden until the network check passes.</p>
+              )}
+            </div>
+          )}
+
+          {(stage === 2 || stage === 3) && (
+            <div>
+              <h2 className="font-semibold">
+                {stage === 2 ? "Shielding your XNO" : "Waiting for the indexer"}
+              </h2>
+              <p className="text-sm text-black/50">
+                {stage === 2
+                  ? `Moving ${nano(BigInt(effectiveDenom))} XNO + 1 raw into the privacy pool.`
+                  : "Your shield is on-chain; the indexer is recording it."}
+              </p>
+              {statusMessage && activeAction !== "external" && (
+                <div className="mt-3 rounded-lg border border-black/10 bg-black/5 px-4 py-3 text-sm text-black">
+                  {pipelineWorking && (
+                    <span className="mr-2 inline-block h-3 w-3 animate-spin rounded-full border border-black/30 border-t-black" />
+                  )}
+                  {statusMessage}
+                </div>
+              )}
+              {depositTx && (
+                <div className="mt-3 flex flex-wrap gap-3 text-xs text-black/70">
+                  <a href={explorerLink(depositTx.depositHash)} target="_blank" rel="noreferrer" className="underline">Deposit tx</a>
+                  <a href={explorerLink(depositTx.commitHash)} target="_blank" rel="noreferrer" className="underline">Commit tx</a>
+                </div>
+              )}
+            </div>
+          )}
+
+          {stage === 4 && (
+            <div>
+              <h2 className="font-semibold">Sending to a fresh address</h2>
+              <p className="text-sm text-black/50">
+                Recipient receives {nano(BigInt(effectiveDenom) - withdrawFeeRaw(BigInt(effectiveDenom), feeBps))} XNO
+                {feeBps > 0 ? ` (${(feeBps / 100).toFixed(1)}% guardian fee deducted)` : " (no guardian fee)"}.
+              </p>
+              {statusMessage && activeAction !== "external" && (
+                <div className="mt-3 rounded-lg border border-black/10 bg-black/5 px-4 py-3 text-sm text-black">
+                  {busy && (
+                    <span className="mr-2 inline-block h-3 w-3 animate-spin rounded-full border border-black/30 border-t-black" />
+                  )}
+                  {statusMessage}
+                </div>
+              )}
+              {!busy && withdrawReady && (
+                <Button onClick={handleWithdraw} variant="secondary" className="mt-4 w-full">
+                  Send privately now
+                </Button>
+              )}
+            </div>
+          )}
+
+          {stage === 5 && (
+            <div>
+              <h2 className="font-semibold">✓ Private send complete</h2>
+              <p className="mt-1 text-sm text-black/60">
+                Your XNO arrived at a fresh private address, unlinkable to the funding source.
+                Use “Send to exchange or external wallet” below to move it out, or fund the
+                shield address again to start another round.
+              </p>
+              {withdrawTx && (
+                <div className="mt-3 text-xs text-black/70">
+                  <a href={explorerLink(withdrawTx)} target="_blank" rel="noreferrer" className="underline">Withdrawal tx</a>
+                </div>
+              )}
+              {lastWithdrawAddress && (
+                <p className="mt-3 text-sm text-black/70">
+                  Delivered to: <span className="break-all font-mono">{lastWithdrawAddress}</span>
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {logs.length > 0 && (
@@ -1480,36 +1624,6 @@ export default function EasyWallet() {
             </pre>
           </div>
         )}
-
-        <div className={stepClasses(3)}>
-          <div className={stepNumClasses(3)}>3</div>
-          <div className="min-w-0 flex-1">
-            <h2 className="font-semibold">Send to a fresh address</h2>
-            <p className="text-sm text-black/50">
-              Recipient receives {nano(BigInt(effectiveDenom) - withdrawFeeRaw(BigInt(effectiveDenom), feeBps))} XNO
-              {feeBps > 0 ? `(${(feeBps / 100).toFixed(1)}% guardian fee deducted)` : "(no guardian fee)"}.
-            </p>
-            <Button onClick={handleWithdraw} disabled={busy || !withdrawReady} variant="secondary" className="mt-4 w-full">
-              {busy ? "Working..." : "Withdraw now"}
-            </Button>
-            {statusMessage && activeAction === "withdraw" && (
-              <div className="mt-3 rounded-lg border border-black/10 bg-black/5 px-4 py-3 text-sm text-black">
-                <span className="mr-2 inline-block h-3 w-3 animate-spin rounded-full border border-black/30 border-t-black" />
-                {statusMessage}
-              </div>
-            )}
-            {withdrawTx && (
-              <div className="mt-3 text-xs text-black/70">
-                <a href={explorerLink(withdrawTx)} target="_blank" rel="noreferrer" className="underline">Withdrawal tx</a>
-              </div>
-            )}
-            {lastWithdrawAddress && (
-              <p className="mt-3 text-sm text-black/70">
-                Last withdrawal: <span className="break-all font-mono">{lastWithdrawAddress}</span>
-              </p>
-            )}
-          </div>
-        </div>
       </div>
 
       <div className="mt-8 rounded-xl border border-black/10 bg-black/5 p-5">
