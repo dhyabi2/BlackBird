@@ -4,7 +4,7 @@ cd /opt/vela
 source venv/bin/activate
 export GUARDIAN_SEED=$(cat /opt/vela/.guardian_seed)
 export VELA_API_KEY=$(cat /opt/vela/.vela_api_key)
-export NANO_RPC_URL="https://rpc.nano.to"
+# NANO_RPC_URL intentionally unset: src/nano_rpc.py defaults to rpc.nano.to (keyed primary) with rpc.nano-gpt.com as the sole keyless fallback.
 export NANO_RPC_KEY="${NANO_RPC_KEY:-$(cat /opt/vela/.nano_rpc_key 2>/dev/null || true)}"
 # FROST threshold-signing coordinator config (guardian id 1). Inert until
 # the DKG ceremony installs group_pubkey files under FROST_DATA_DIR.
