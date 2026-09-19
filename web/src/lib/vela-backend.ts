@@ -42,6 +42,31 @@ export async function getPoolStatus() {
   }>("/api/status");
 }
 
+export type E2eStatus = {
+  /** true only when the newest probe passed AND is fresh; null = never run. */
+  ok: boolean | null;
+  state: "ok" | "failing" | "stale" | "unknown";
+  checked_at?: string | null;
+  age_seconds?: number | null;
+  duration_ms?: number | null;
+  failed_step?: string | null;
+  error?: string | null;
+  epoch?: number | null;
+  denomination_nano?: string | null;
+  steps?: { name: string; ok: boolean; ms: number; error?: string }[];
+  recent?: {
+    checked_at: string;
+    ok: boolean;
+    duration_ms: number;
+    failed_step: string | null;
+  }[];
+};
+
+/** Result of the hourly end-to-end probe that shields and withdraws real XNO. */
+export async function getE2eStatus() {
+  return velaFetch<E2eStatus>("/api/e2e_status");
+}
+
 export async function getFeeConfig() {
   return velaFetch<{
     fee_bps?: number;

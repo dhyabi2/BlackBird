@@ -1,0 +1,21 @@
+[Unit]
+Description=BlackBird hourly end-to-end probe (shield -> withdraw -> return to sender)
+After=network-online.target vela-indexer.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Must match vela-indexer.service: the probe writes the status file that the
+# indexer reads and serves at /api/e2e_status.
+User=vela
+Group=vela
+WorkingDirectory=/opt/vela
+ExecStart=/opt/vela/scripts/run_e2e_monitor.sh
+# The probe waits on network confirmations; give it room, but never let a hung
+# run overlap the next hour's run.
+TimeoutStartSec=900
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

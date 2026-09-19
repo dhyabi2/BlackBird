@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Nav } from "@/components/Nav";
+import { MaintenanceGate } from "@/components/MaintenanceGate";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -106,7 +107,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
         />
         <Nav />
-        <main className="flex-1">{children}</main>
+        <main className="flex-1">
+          <MaintenanceGate>{children}</MaintenanceGate>
+        </main>
         <footer className="border-t border-black/10 py-6 text-sm text-black/50">
           <div className="flex items-center justify-center gap-2">
             <span>BlackBird</span>

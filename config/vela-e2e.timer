@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the BlackBird end-to-end probe every hour
+
+[Timer]
+# Hourly, offset off the hour so it does not collide with other cron work.
+OnCalendar=*-*-* *:17:00
+# Catch up after a reboot so a restarted box does not look "stale" for an hour.
+Persistent=true
+AccuracySec=1min
+Unit=vela-e2e.service
+
+[Install]
+WantedBy=timers.target

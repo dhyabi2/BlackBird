@@ -1,8 +1,9 @@
 import { z } from "zod";
 
-// All Nano RPC calls are hard-coded to rpc.nano.to (primary, keyed) with
-// rpc.nano-gpt.com as the sole keyless transport fallback; the endpoints are
-// not configurable so the app cannot accidentally proxy calls to another node.
+// All Nano RPC calls are hard-coded to rpc.nano.to — the one and only endpoint,
+// with no fallback node. It is not configurable, so the app cannot accidentally
+// proxy calls elsewhere, and a real outage surfaces as a maintenance screen
+// instead of being hidden by a silent reroute.
 const envSchema = z.object({
   NANO_RPC_KEY: z.string().min(1, "NANO_RPC_KEY is required"),
   VELA_BACKEND_URL: z.string().url(),

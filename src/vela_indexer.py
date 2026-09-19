@@ -231,6 +231,24 @@ class VelaIndexer:
             return None
 
 
+# Probe steps whose failure means the MONITOR is unhealthy, not the protocol.
+# Reported as "unknown" so the site warns operators without blocking users.
+_E2E_MONITOR_STEPS = {"preflight", "config"}
+
+# A probe result older than this is treated as no result at all.
+_E2E_STALE_AFTER = int(os.environ.get("E2E_STALE_AFTER_SECONDS", 2 * 60 * 60))
+
+
+def _parse_iso8601(value: str) -> float:
+    """Epoch seconds from an ISO-8601 timestamp (Node emits a trailing 'Z')."""
+    from datetime import datetime, timezone
+
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
 def require_api_key(f):
     @functools.wraps(f)
     def decorated(*args, **kwargs):
@@ -307,6 +325,86 @@ def create_app(indexer: VelaIndexer) -> Flask:
     def health():
         return jsonify({"status": "ok", "epoch": indexer.current_epoch()})
 
+    @app.route("/api/e2e_status")
+    def api_e2e_status():
+        """Last result of the hourly end-to-end probe (scripts/e2e-monitor.mjs).
+
+        Deliberately unauthenticated: the website reads this to warn users off
+        depositing while the pipeline is broken, and a warning nobody can fetch
+        is worse than no warning. It exposes only pass/fail, timings and the
+        probe's own throwaway addresses.
+        """
+        path = os.environ.get(
+            "E2E_STATE_FILE", os.path.join(indexer.data_dir, "e2e-monitor.json")
+        )
+        try:
+            with open(path) as fh:
+                state = json.load(fh)
+        except FileNotFoundError:
+            return jsonify({
+                "ok": None,
+                "state": "unknown",
+                "detail": "No end-to-end probe has run yet.",
+            })
+        except Exception as e:
+            return jsonify({"ok": None, "state": "unknown", "detail": str(e)}), 200
+
+        last = state.get("last")
+        if not last:
+            return jsonify({"ok": None, "state": "unknown",
+                            "detail": "No end-to-end probe has run yet."})
+
+        # A probe that stopped running is itself an outage signal: stale data
+        # must never read as a green light.
+        age = None
+        try:
+            finished = last.get("finished_at")
+            if finished:
+                age = time.time() - _parse_iso8601(finished)
+        except Exception:
+            age = None
+
+        # A probe that could not even start says nothing about the protocol —
+        # the monitoring wallet ran out of XNO, or its seeds are missing. That
+        # must NOT read as an outage, or the site would stop everyone from
+        # depositing the moment the probe needs a top-up.
+        monitor_broken = last.get("failed_step") in _E2E_MONITOR_STEPS
+
+        stale = age is not None and age > _E2E_STALE_AFTER
+        if monitor_broken:
+            state_label = "unknown"
+        elif stale:
+            state_label = "stale"
+        elif last.get("ok"):
+            state_label = "ok"
+        else:
+            state_label = "failing"
+
+        recent = state.get("history", [])[:24]
+        return jsonify({
+            "ok": bool(last.get("ok")) and not stale and not monitor_broken,
+            "monitor_degraded": monitor_broken,
+            "state": state_label,
+            "checked_at": last.get("finished_at"),
+            "age_seconds": int(age) if age is not None else None,
+            "duration_ms": last.get("duration_ms"),
+            "failed_step": last.get("failed_step"),
+            "error": last.get("error"),
+            "epoch": last.get("epoch"),
+            "denomination_nano": last.get("denomination_nano"),
+            "source_balance_nano": last.get("source_balance_nano"),
+            "steps": last.get("steps", []),
+            "recent": [
+                {
+                    "checked_at": r.get("finished_at"),
+                    "ok": bool(r.get("ok")),
+                    "duration_ms": r.get("duration_ms"),
+                    "failed_step": r.get("failed_step"),
+                }
+                for r in recent
+            ],
+        })
+
     @app.route("/api/status")
     def api_status():
         epoch = indexer.current_epoch()
@@ -317,11 +415,30 @@ def create_app(indexer: VelaIndexer) -> Flask:
                 "denomination": str(denom),
                 "root": hex(root) if root else None,
             })
+        # RPC health is reported explicitly. A silently-degraded RPC is what
+        # turned an expired API key into deposits that retried 12 times and
+        # gave up with a misleading "invalid deposit/commit pair".
+        rpc_ok = True
+        rpc_detail = None
+        try:
+            indexer.rpc.call("block_count", {})
+        except Exception as e:
+            rpc_ok = False
+            rpc_detail = str(e)
+
         return jsonify({
-            "status": "ok",
+            "status": "ok" if rpc_ok else "degraded",
             "epoch": epoch,
             "roots": roots,
             "pool_pubkey": pool_pubkey(10**30).hex(),
+            "rpc": {
+                "ok": rpc_ok,
+                # True once rpc.nano.to has rejected NANO_RPC_KEY. Reads keep
+                # working on the keyless tier, but work_generate is paid-only,
+                # so PoW falls back to local CPU until the key is renewed.
+                "key_rejected": bool(getattr(indexer.rpc, "key_rejected", False)),
+                "detail": rpc_detail,
+            },
         })
 
     @app.route("/api/deposit", methods=["POST"])

@@ -20,19 +20,20 @@ import {
   DEFAULT_REP,
 } from "./nano.mjs";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, "..");
 const WALLETS_FILE = path.join(ROOT, "test-wallets.json.enc");
 const BASE_URL = process.env.VELA_BASE_URL || "https://velav2-web.vercel.app";
 
-async function apiGet(path) {
+export async function apiGet(path) {
   const res = await fetch(`${BASE_URL}${path}`);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `GET ${path} failed: ${res.status}`);
   return data;
 }
 
-async function apiPost(path, body) {
+export async function apiPost(path, body) {
   const res = await fetch(`${BASE_URL}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -43,7 +44,7 @@ async function apiPost(path, body) {
   return data;
 }
 
-async function generateWork(hash, subtype = "send") {
+export async function generateWork(hash, subtype = "send") {
   const difficulty = subtype === "send" ? SEND_THRESHOLD : RECEIVE_THRESHOLD;
   // Optional local work provider (e.g. GPU work bridge) via WORK_URL env var.
   if (process.env.WORK_URL) {
@@ -61,15 +62,15 @@ async function generateWork(hash, subtype = "send") {
   return res.work;
 }
 
-async function fetchAccountInfo(account) {
+export async function fetchAccountInfo(account) {
   return apiGet(`/api/account_info?account=${encodeURIComponent(account)}`);
 }
 
-async function fetchPending(account) {
+export async function fetchPending(account) {
   return apiGet(`/api/pending?account=${encodeURIComponent(account)}`);
 }
 
-async function broadcastBlock(block, subtype) {
+export async function broadcastBlock(block, subtype) {
   try {
     return await apiPost("/api/broadcast", { block, subtype });
   } catch (err) {
@@ -104,11 +105,11 @@ async function findDepositCommitHashes(sourceAddress, poolPubkeyHex) {
   return null;
 }
 
-function sleep(ms) {
+export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForConfirmation(hashes, timeoutMs = 60_000, intervalMs = 3_000) {
+export async function waitForConfirmation(hashes, timeoutMs = 60_000, intervalMs = 3_000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
@@ -122,7 +123,7 @@ async function waitForConfirmation(hashes, timeoutMs = 60_000, intervalMs = 3_00
   return false;
 }
 
-async function submitDepositWithRetry(depositHash, commitHash, maxAttempts = 12, intervalMs = 5_000) {
+export async function submitDepositWithRetry(depositHash, commitHash, maxAttempts = 12, intervalMs = 5_000) {
   let lastError;
   for (let i = 0; i < maxAttempts; i++) {
     try {
@@ -349,13 +350,13 @@ async function cmdStatus() {
 const DOMAIN_DEPOSIT = 1n;
 const DOMAIN_NULL = 2n;
 
-function hexToBytes(hex) {
+export function hexToBytes(hex) {
   const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
   if (clean.length % 2 !== 0) throw new Error("Invalid hex length");
   return new Uint8Array(clean.match(/.{1,2}/g).map((b) => parseInt(b, 16)));
 }
 
-function bytesToHex(bytes) {
+export function bytesToHex(bytes) {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
@@ -368,7 +369,7 @@ function split32(value) {
   return [lo, hi];
 }
 
-function computeCommitment(n, t, P_w, S_pub) {
+export function computeCommitment(n, t, P_w, S_pub) {
   const [n_lo, n_hi] = split32(n);
   const [t_lo, t_hi] = split32(t);
   const [P_w_lo, P_w_hi] = split32(P_w);
@@ -376,12 +377,12 @@ function computeCommitment(n, t, P_w, S_pub) {
   return poseidon9([DOMAIN_DEPOSIT, n_lo, n_hi, t_lo, t_hi, P_w_lo, P_w_hi, S_pub_lo, S_pub_hi]);
 }
 
-function computeNullifier(n) {
+export function computeNullifier(n) {
   const [n_lo, n_hi] = split32(n);
   return poseidon3([DOMAIN_NULL, n_lo, n_hi]);
 }
 
-function deriveSecretBytes(seedHex, P_w_hex, salt) {
+export function deriveSecretBytes(seedHex, P_w_hex, salt) {
   const seedBytes = hexToBytes(seedHex);
   const PwBytes = hexToBytes(P_w_hex);
   const saltBytes = new TextEncoder().encode(salt);
@@ -392,16 +393,16 @@ function deriveSecretBytes(seedHex, P_w_hex, salt) {
   return blake2b(input, undefined, 32);
 }
 
-async function fetchPoolInfo(denomRaw) {
+export async function fetchPoolInfo(denomRaw) {
   return apiGet(`/api/pool_address/${denomRaw}`);
 }
 
-async function fetchEpoch() {
+export async function fetchEpoch() {
   const status = await apiGet("/api/status");
   return status.epoch;
 }
 
-async function runVelaCycleForWallet(sourceWallet, withdrawWallet, resume = false) {
+export async function runVelaCycleForWallet(sourceWallet, withdrawWallet, resume = false) {
   const denomRaw = nanoToRaw("0.1");
   const poolInfo = await fetchPoolInfo(denomRaw);
   const poolPubkeyHex = poolInfo.pool_pubkey;
@@ -518,6 +519,16 @@ async function runVelaCycleForWallet(sourceWallet, withdrawWallet, resume = fals
   const signedBlock = { ...withdrawRes.block, work };
   await broadcastBlock(signedBlock, "send");
   console.log(`  withdrawal broadcasted to ${withdrawWallet.address}`);
+
+  return {
+    denomRaw,
+    epoch,
+    depositHash,
+    commitHash,
+    commitment: depositRes.commitment,
+    nullifier: nullifier.toString(16),
+    withdrawBlockHash: withdrawRes.block_hash,
+  };
 }
 
 async function cmdVela(indexStr, withdrawIndexStr) {
@@ -738,7 +749,12 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error("ERROR:", err.message);
-  process.exit(1);
-});
+const invokedDirectly =
+  process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename);
+
+if (invokedDirectly) {
+  main().catch((err) => {
+    console.error("ERROR:", err.message);
+    process.exit(1);
+  });
+}

@@ -9,12 +9,9 @@ export const SEND_THRESHOLD = "fffffff800000000";
 export const RECEIVE_THRESHOLD = "fffffe0000000000";
 export const DEFAULT_REP = "nano_3jwrszth46rk1mu7rmb4rhm54us8yg1gw3ipodftqtikf5yqdyr7471nsg1k";
 
-// rpc.nano.to is the PRIMARY and only keyed endpoint. rpc.nano-gpt.com is the
-// SOLE permitted fallback (same rule as holdergame): keyless, tried only when
-// nano.to does not answer (transport failure/timeout), and its keyless tier
-// does not serve work_generate. The API key is never sent to the fallback.
+// rpc.nano.to is the ONE and ONLY endpoint (owner policy, AGENTS.md). No
+// fallback: rpc.nano-gpt.com was removed 2026-09-11 (expired TLS certificate).
 const RPC_URL = "https://rpc.nano.to";
-const FALLBACK_RPC_URL = "https://rpc.nano-gpt.com";
 const RPC_KEY = process.env.NANO_RPC_KEY || "";
 const RPC_TIMEOUT = 20000;
 const RPC_RETRIES = 3;
@@ -160,26 +157,44 @@ async function callRpcEndpoint(url, body, headers) {
   }
 }
 
+// rpc.nano.to rejects a stale credential with HTTP 200 + {"error":"Invalid API
+// Key."}, which otherwise reads as a semantic answer and fails the call without
+// ever trying the keyless tier. Latched so later calls skip the dead round-trip.
+let keyRejected = false;
+
+function isAuthError(message) {
+  const m = String(message).toLowerCase();
+  return m.includes("invalid api key") || m.includes("invalid key") || m.includes("unauthorized");
+}
+
 export async function rpcCall(action, params = {}) {
   const body = JSON.stringify({ action, ...params });
   const headers = { "Content-Type": "application/json" };
   // The API key belongs to rpc.nano.to ONLY — never sent to the fallback.
-  const keyedHeaders = RPC_KEY ? { ...headers, Authorization: RPC_KEY } : headers;
+  const keyedHeaders =
+    RPC_KEY && !keyRejected ? { ...headers, Authorization: RPC_KEY } : headers;
 
   let lastError;
   for (let attempt = 1; attempt <= RPC_RETRIES; attempt++) {
     try {
       return await callRpcEndpoint(RPC_URL, body, keyedHeaders);
     } catch (err) {
+      if (err instanceof RpcSemanticError && isAuthError(err.message) && keyedHeaders !== headers) {
+        // Endpoint is healthy, our key is not: retry nano.to keyless.
+        keyRejected = true;
+        console.warn(
+          `[Nano] rpc.nano.to rejected NANO_RPC_KEY (${err.message}); continuing keyless.`
+        );
+        try {
+          return await callRpcEndpoint(RPC_URL, body, headers);
+        } catch (err2) {
+          if (err2 instanceof RpcSemanticError) throw new Error(err2.message);
+          lastError = err2;
+        }
+      }
       if (err instanceof RpcSemanticError) throw new Error(err.message);
       lastError = err;
       console.warn(`[Nano] RPC ${RPC_URL} attempt ${attempt}/${RPC_RETRIES} failed:`, err.message);
-    }
-    try {
-      return await callRpcEndpoint(FALLBACK_RPC_URL, body, headers);
-    } catch (err) {
-      if (err instanceof RpcSemanticError) throw new Error(err.message);
-      console.warn(`[Nano] Fallback RPC ${FALLBACK_RPC_URL} attempt ${attempt}/${RPC_RETRIES} failed:`, err.message);
     }
   }
   throw lastError || new Error("All RPC attempts failed");

@@ -300,7 +300,10 @@ export default function EasyWallet() {
       .then((s) => setEpoch(s.epoch ?? null))
       .catch(() => null);
 
-    // Strict backend green-light check before allowing any deposit.
+    // Strict backend green-light check before allowing any deposit. The
+    // end-to-end verdict is NOT consulted here: MaintenanceGate already decided
+    // at page load whether it was safe to start, and re-checking mid-flow could
+    // strand a user who is part-way through a shield.
     apiGet("/api/greenlight")
       .then(() => setGreenlight({ ok: true }))
       .catch((err) => setGreenlight({ ok: false, error: err instanceof Error ? err.message : "Network check failed" }));

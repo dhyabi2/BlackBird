@@ -1,15 +1,12 @@
 import { getEnv } from "./env";
 
-// BlackBird talks to exactly two hard-coded Nano RPC endpoints so environment
-// variables cannot redirect calls to a different node. https://rpc.nano.to is
-// the PRIMARY and only keyed endpoint. https://rpc.nano-gpt.com is the SOLE
-// permitted fallback (pattern shared with holdergame), used only when nano.to
-// does not answer (transport failure/timeout), keyless, for its keyless tier
-// (reads + process + work_validate — its keyless tier does NOT serve
-// work_generate). The API key is sent to rpc.nano.to ONLY — never to the
-// fallback. Local/backend proof-of-work remains the work fallback.
+// BlackBird talks to exactly ONE hard-coded Nano RPC endpoint so environment
+// variables cannot redirect calls to a different node. There is no fallback:
+// rpc.nano-gpt.com was removed 2026-09-11 (expired TLS certificate — it answered
+// nothing while masking the real error from nano.to). If rpc.nano.to is down the
+// app shows a maintenance screen rather than silently rerouting user traffic.
+// Local/backend proof-of-work remains the work fallback.
 const NANO_RPC_ENDPOINT = "https://rpc.nano.to";
-const FALLBACK_RPC_ENDPOINT = "https://rpc.nano-gpt.com";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -21,15 +18,42 @@ export type NanoRpcResponse<T = unknown> =
  * never a reason to fail over. */
 class SemanticError extends Error {}
 
+/** rpc.nano.to rejected our credential. It answers with HTTP 200 and
+ * {"error":"Invalid API Key."}, which otherwise reads as a SemanticError and
+ * fails the call outright. The node itself is healthy and its keyless tier
+ * serves every read we make, so the right move is to retry the SAME endpoint
+ * without the key. */
+class AuthError extends Error {}
+
+function isAuthErrorMessage(msg: string): boolean {
+  const m = msg.toLowerCase();
+  return (
+    m.includes("invalid api key") ||
+    m.includes("invalid key") ||
+    m.includes("unauthorized")
+  );
+}
+
+/** Latched once nano.to rejects the key so later calls skip the doomed
+ * round-trip. Read by /api/greenlight to surface a degraded (not broken) tier. */
+let keyRejected = false;
+
+export function isRpcKeyRejected(): boolean {
+  return keyRejected;
+}
+
 async function callEndpoint<T>(
   endpoint: string,
   action: string,
   params: Record<string, unknown>,
-  timeoutMs: number
+  timeoutMs: number,
+  withKey = true
 ): Promise<T> {
   const env = getEnv();
-  // The API key belongs to rpc.nano.to ONLY — never sent to the fallback.
-  const useKey = endpoint === NANO_RPC_ENDPOINT;
+  // The API key belongs to rpc.nano.to ONLY — never sent to the fallback, and
+  // never again once nano.to has rejected it.
+  const useKey =
+    endpoint === NANO_RPC_ENDPOINT && withKey && !keyRejected && !!env.NANO_RPC_KEY;
   const body = useKey
     ? { action, ...params, key: env.NANO_RPC_KEY }
     : { action, ...params };
@@ -56,7 +80,11 @@ async function callEndpoint<T>(
     const data = (await response.json()) as NanoRpcResponse<T>;
 
     if (data && typeof data === "object" && "error" in data) {
-      throw new SemanticError(`Nano RPC error: ${data.error}`);
+      const message = String(data.error);
+      if (useKey && isAuthErrorMessage(message)) {
+        throw new AuthError(message);
+      }
+      throw new SemanticError(`Nano RPC error: ${message}`);
     }
 
     return data as T;
@@ -73,14 +101,25 @@ export async function nanoRpcCall<T = unknown>(
   try {
     return await callEndpoint<T>(NANO_RPC_ENDPOINT, action, params, timeoutMs);
   } catch (err) {
-    if (err instanceof SemanticError) throw new Error(err.message);
-    // Transport failure/timeout on nano.to → the one permitted fallback.
-    try {
-      return await callEndpoint<T>(FALLBACK_RPC_ENDPOINT, action, params, timeoutMs);
-    } catch (err2) {
-      if (err2 instanceof SemanticError) throw new Error(err2.message);
-      throw err; // report the primary's failure
+    if (err instanceof AuthError) {
+      // Same endpoint, keyless. Latch so the next call goes straight there.
+      keyRejected = true;
+      console.warn(
+        `nano-rpc: rpc.nano.to rejected NANO_RPC_KEY (${err.message}); ` +
+          "continuing keyless. Renew the key to restore the paid tier."
+      );
+      return await callEndpoint<T>(
+        NANO_RPC_ENDPOINT,
+        action,
+        params,
+        timeoutMs,
+        false
+      );
     }
+    if (err instanceof SemanticError) throw new Error(err.message);
+    // No fallback node by design: surface the failure so the caller (and the
+    // maintenance screen) can react to a real rpc.nano.to outage.
+    throw err;
   }
 }
 

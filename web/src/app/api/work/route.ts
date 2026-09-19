@@ -30,12 +30,11 @@ export async function POST(request: NextRequest) {
     const threshold = parsed.data.difficulty ?? "fffffe0000000000";
 
     // 1. Primary: the paid rpc.nano.to GPU work service (~0.1-0.6s; their
-    //    invalid-nonce bug was fixed 2026-08-19), with rpc.nano-gpt.com as the
-    //    transport-level fallback inside nanoRpcCall (its keyless tier does
-    //    not serve work_generate, so in practice work still comes from
-    //    nano.to; the fallback covers every other RPC action). Short timeout
-    //    per endpoint — work_generate is known to hang. Every nonce is still
-    //    validated locally before use — never trusted blindly.
+    //    invalid-nonce bug was fixed 2026-08-19). rpc.nano.to is the only RPC
+    //    endpoint — there is no fallback node. Its keyless tier does NOT serve
+    //    work_generate (402 Payment Required), so an expired key silently
+    //    demotes PoW to the local paths in step 2. Short timeout — work_generate
+    //    is known to hang. Every nonce is validated locally before use.
     const primary = await nanoRpcCall(
       "work_generate",
       {
