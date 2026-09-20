@@ -102,6 +102,28 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-white text-black">
+        <div
+          role="status"
+          className="border-b-4 border-red-600 bg-red-900 px-4 py-3 text-center text-sm text-white"
+        >
+          <span className="font-bold tracking-widest">NOT OPERATING</span>
+          <span className="opacity-95">
+            {" "}&mdash; this service is shut down and is no longer processing
+            payments. Please do not send funds.
+          </span>
+          <span className="mt-1 block opacity-90">
+            BlackBird is open source &mdash; anyone interested can run it
+            themselves:{" "}
+            <a
+              href="https://github.com/dhyabi2/BlackBird"
+              target="_blank"
+              rel="noreferrer"
+              className="font-semibold underline underline-offset-2 hover:opacity-80"
+            >
+              github.com/dhyabi2/BlackBird
+            </a>
+          </span>
+        </div>
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
