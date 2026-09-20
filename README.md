@@ -62,8 +62,9 @@ fund-migration runbook, `frost/` for the signing CLI, and
 The live deployment runs a 2-of-3 FROST threshold guardian network across three VPSes (coordinator + two verifying cosigners in separate regions):
 
 - **Web app:** https://www.xblackbird.com
-- **Indexer:** `http://127.0.0.1:8080` (VPS localhost) / Tor: `ejg5mnh3lvhmgwyrxrbzuqgd3k3siplndsxhzht23vxitjxppf2yukid.onion`
-- **Guardian:** `http://127.0.0.1:8081` (VPS localhost) / Tor: `jnigdgannexjxemablsyxwf6uass3ufcq4xu6eftmrwadym3z3dleyad.onion`
+- **Indexer:** `http://127.0.0.1:8080` (VPS localhost) / Tor: `ksal2to2i34fxkthsslpk6tl55hifhlltt5hyfb3t3tyrqkaosszysad.onion`
+- **Guardian:** `http://127.0.0.1:8081` (VPS localhost) / Tor: `nlejbh77kaiwbz5ylqgyet22dilq63hd4gayh6hfmstipgfrc2ixa5id.onion`
+  (the guardian onion is configured but is currently not resolving; use the localhost port. The indexer onion is verified reachable.)
 - **Pool address:** derived from the guardian seed; see `/pool_address` on the guardian.
 
 ## Quick Start
