@@ -37,7 +37,11 @@ fi
 
 # Rust toolchain to build the frost-guardian CLI from source on this box.
 if ! command -v cargo >/dev/null 2>&1; then
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+    # Download to a file first so it can be inspected (and its hash recorded) before it runs.
+    RUSTUP_SH="$(mktemp)"
+    curl --proto '=https' --tlsv1.2 -sSf -o "$RUSTUP_SH" https://sh.rustup.rs
+    sh "$RUSTUP_SH" -y --profile minimal
+    rm -f "$RUSTUP_SH"
     source "$HOME/.cargo/env"
 fi
 
